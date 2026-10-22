@@ -1,0 +1,148 @@
+# Tests the command line version, then builds the installers natively on each OS.
+# Push a tag like v1.0.0 to attach the installers to a GitHub release.
+name: Build installers
+
+on:
+  push:
+    tags: ["v*"]
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # the sample suite against the built-in test API, with plain Node.js (no Electron needed)
+  cli-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --omit=dev --no-audit --no-fund
+      # samples/ is generated from src/core/sample.js (npm run samples); ids and export time are ignored
+      - name: Check that samples/ is up to date
+        run: npm run samples:check
+      - name: Run the sample suite
+        run: node src/cli.js run samples/sample.apisuite --echo-server --reporter cli,junit,html --out reports
+      - name: Data-driven run (one iteration per CSV row)
+        run: node src/cli.js run samples/sample.apisuite --echo-server --folder "6. Data-driven and scripts" --data samples/sample-users.csv
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sample-run-reports
+          path: reports/
+          if-no-files-found: ignore
+
+  build:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: cli-test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: --win
+          - os: ubuntu-latest
+            target: --linux
+          - os: macos-latest
+            target: --mac
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build
+        run: npx electron-builder ${{ matrix.target }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      # the Linux packages start through the launcher script written by build/afterPack.js
+      - name: Smoke test the Linux launcher (command line version, no display)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          test -x dist/linux-unpacked/api-tester.bin
+          head -c 2 dist/linux-unpacked/api-tester | grep -q '#!'
+          env -u DISPLAY -u WAYLAND_DISPLAY dist/linux-unpacked/api-tester --version
+          env -u DISPLAY -u WAYLAND_DISPLAY dist/linux-unpacked/api-tester run samples/sample.apisuite --echo-server
+      - name: Smoke test the macOS command line wrapper
+        if: matrix.os == 'macos-latest'
+        run: |
+          # the runner is Apple silicon: test the arm64 build (dist/mac is the Intel one)
+          APP="dist/mac-arm64/API Tester.app"
+          [ -d "$APP" ] || APP="dist/mac/API Tester.app"
+          test -x "$APP/Contents/Resources/bin/api-tester"
+          "$APP/Contents/Resources/bin/api-tester" run samples/sample.apisuite --echo-server
+      - name: Smoke test the Windows command line wrapper
+        if: matrix.os == 'windows-latest'
+        shell: cmd
+        # "call": a .cmd started from a batch script without it never returns to the next line
+        run: |
+          call dist\win-unpacked\bin\api-tester.cmd --version || exit /b 1
+          call dist\win-unpacked\bin\api-tester.cmd run samples\sample.apisuite --echo-server || exit /b 1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.os }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.zip
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          body: |
+            ## Which file do I need?
+
+            | System | File |
+            |---|---|
+            | Windows 10/11 | `API-Tester-Setup-…-x64.exe` (installer) or `API-Tester-Portable-…-x64.exe` (no installation) |
+            | macOS, Apple silicon (M1 and newer) | `API-Tester-…-mac-arm64.dmg` |
+            | macOS, Intel | `API-Tester-…-mac-x64.dmg` |
+            | Debian / Ubuntu | `API-Tester-…-linux-amd64.deb` (x64) or `…-linux-arm64.deb` (ARM) |
+            | Any Linux | `…-linux-x86_64.AppImage` / `…-linux-arm64.AppImage`, or the `.tar.gz` |
+            | CI pipelines / Docker | build the image from the source code: `docker build -t api-tester .` |
+
+            ## First start
+
+            These builds are not signed with a paid code-signing certificate, so the system asks once before the first start.
+
+            **macOS** – drag the app to Applications and open it. When macOS says *"API Tester" Not Opened*, click **Done**, then open **System Settings → Privacy & Security**, scroll down and click **Open Anyway** (confirm with your password). Or run once in Terminal:
+            ```
+            xattr -dr com.apple.quarantine "/Applications/API Tester.app"
+            ```
+
+            **Windows** – when SmartScreen shows *"Windows protected your PC"*, click **More info → Run anyway** (installer and portable .exe).
+
+            **Linux (.deb)** – `sudo apt install ./API-Tester-*-linux-amd64.deb`, then start *API Tester* from the app menu or run `api-tester`.
+
+            **Linux (AppImage / .tar.gz)** – `chmod +x API-Tester-*.AppImage && ./API-Tester-*.AppImage`, or extract the `.tar.gz` and run `./api-tester`. If system libraries are missing (minimal server images), the launcher prints the exact `apt` / `dnf` command to install them.
+
+            ## Command line (CI)
+
+            Run an exported suite without opening a window; exit code 0 = all passed, 1 = failures:
+
+            | System | Command |
+            |---|---|
+            | Linux (.deb) | `api-tester run my-suite.apisuite --env CI --reporter cli,junit --out reports` |
+            | Linux (AppImage) | `./API-Tester-*.AppImage run my-suite.apisuite` |
+            | macOS | `"/Applications/API Tester.app/Contents/Resources/bin/api-tester" run my-suite.apisuite` |
+            | Windows (installer) | `"%LOCALAPPDATA%\Programs\api-tester\bin\api-tester.cmd" run my-suite.apisuite` |
+            | Docker | `docker run --rm -v "$PWD:/work" api-tester run /work/my-suite.apisuite` |

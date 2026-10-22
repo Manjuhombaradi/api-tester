@@ -1,0 +1,7 @@
+# Windows scripts need CRLF, shell scripts LF - whatever the checkout system is
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.sh text eol=lf
+*.command text eol=lf
+build/bin/api-tester text eol=lf
+*.png binary

@@ -1,0 +1,2582 @@
+{
+  "format": "api-tester-suite",
+  "version": 1,
+  "exportedAt": "2026-10-22T12:14:28.300Z",
+  "exportedWith": "API Tester 1.0.0",
+  "secretsIncluded": true,
+  "id": "s_ecfffb045493",
+  "name": "Sample: Echo API",
+  "description": "A tour of API Tester against the built-in echo server (it runs on this computer, no internet needed). Open the requests one by one, or run everything with the Runner: every check should pass. Each request's Docs tab explains what it shows.",
+  "variables": [
+    {
+      "key": "username",
+      "value": "demo",
+      "enabled": true,
+      "secret": false,
+      "description": "Login of the echo server"
+    },
+    {
+      "key": "password",
+      "value": "demo",
+      "enabled": true,
+      "secret": false,
+      "description": "Password of the echo server's demo user"
+    },
+    {
+      "key": "clientId",
+      "value": "demo",
+      "enabled": true,
+      "secret": false,
+      "description": "OAuth 2.0 client of the echo server"
+    },
+    {
+      "key": "clientSecret",
+      "value": "secret",
+      "enabled": true,
+      "secret": true,
+      "description": "A secret variable: hidden on screen and left out when you export the suite (unless you choose to include secrets)"
+    },
+    {
+      "key": "name",
+      "value": "Grace Hopper",
+      "enabled": true,
+      "secret": false,
+      "description": "Default for the data-driven request (a data file overrides it)"
+    },
+    {
+      "key": "email",
+      "value": "grace@example.com",
+      "enabled": true,
+      "secret": false,
+      "description": "Default for the data-driven request (a data file overrides it)"
+    }
+  ],
+  "auth": {
+    "type": "none",
+    "basic": {
+      "username": "",
+      "password": ""
+    },
+    "bearer": {
+      "token": ""
+    },
+    "apikey": {
+      "key": "X-API-Key",
+      "value": "",
+      "in": "header"
+    },
+    "oauth2": {
+      "grantType": "client_credentials",
+      "tokenUrl": "",
+      "clientId": "",
+      "clientSecret": "",
+      "scope": "",
+      "audience": "",
+      "username": "",
+      "password": "",
+      "clientAuth": "body"
+    }
+  },
+  "headers": [
+    {
+      "key": "X-Client-Name",
+      "value": "API Tester sample",
+      "enabled": true,
+      "description": "Sent with every request of this suite"
+    }
+  ],
+  "environments": [
+    {
+      "id": "e_0c91b295264c",
+      "name": "Local echo server",
+      "variables": [
+        {
+          "key": "baseUrl",
+          "value": "http://127.0.0.1:3999",
+          "enabled": true,
+          "secret": false,
+          "description": "The built-in echo server (Settings > Echo server)"
+        }
+      ]
+    },
+    {
+      "id": "e_eec7624445f5",
+      "name": "Custom",
+      "variables": [
+        {
+          "key": "baseUrl",
+          "value": "",
+          "enabled": true,
+          "secret": false,
+          "description": "Address of another server, e.g. http://192.168.1.20:3999"
+        }
+      ]
+    }
+  ],
+  "activeEnvironmentId": "e_0c91b295264c",
+  "items": [
+    {
+      "id": "f_b188ff78a377",
+      "type": "folder",
+      "name": "1. Requests and assertions",
+      "description": "Sending requests and checking responses with no-code assertions.",
+      "auth": {
+        "type": "inherit",
+        "basic": {
+          "username": "",
+          "password": ""
+        },
+        "bearer": {
+          "token": ""
+        },
+        "apikey": {
+          "key": "X-API-Key",
+          "value": "",
+          "in": "header"
+        },
+        "oauth2": {
+          "grantType": "client_credentials",
+          "tokenUrl": "",
+          "clientId": "",
+          "clientSecret": "",
+          "scope": "",
+          "audience": "",
+          "username": "",
+          "password": "",
+          "clientAuth": "body"
+        }
+      },
+      "headers": [],
+      "variables": [],
+      "items": [
+        {
+          "id": "r_791b36493732",
+          "type": "request",
+          "name": "Get with query parameters",
+          "description": "Query parameters live in the Params tab. Disabled rows are not sent. The echo server returns what it received, so the assertions can check the parameters and the default header that the suite adds to every request.",
+          "method": "GET",
+          "url": "{{baseUrl}}/anything/search",
+          "params": [
+            {
+              "key": "q",
+              "value": "api tester",
+              "enabled": true,
+              "description": ""
+            },
+            {
+              "key": "page",
+              "value": "1",
+              "enabled": true,
+              "description": ""
+            },
+            {
+              "key": "debug",
+              "value": "true",
+              "enabled": false,
+              "description": "Disabled: not sent"
+            }
+          ],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "none",
+            "raw": "",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_7712f370a4c1",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "200"
+            },
+            {
+              "id": "a_394795f9819b",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.query.q",
+              "operator": "equals",
+              "expected": "api tester"
+            },
+            {
+              "id": "a_ad7769653d8d",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.query.page",
+              "operator": "equals",
+              "expected": "1"
+            },
+            {
+              "id": "a_5d964da45540",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.query.debug",
+              "operator": "notExists",
+              "expected": ""
+            },
+            {
+              "id": "a_d3b5529cd8dc",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.headers['x-client-name']",
+              "operator": "equals",
+              "expected": "API Tester sample"
+            },
+            {
+              "id": "a_44098bac2bb8",
+              "enabled": true,
+              "source": "responseTime",
+              "property": "",
+              "operator": "lt",
+              "expected": "2000"
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        },
+        {
+          "id": "r_4722edade948",
+          "type": "request",
+          "name": "Post JSON with assertions",
+          "description": "A JSON body with variables: {{username}} comes from the suite variables and {{$guid}} is a dynamic variable (a new UUID each time). The assertions check the status, a header, values inside the JSON (JSONPath), the response time and the shape of the whole body (JSON Schema).",
+          "method": "POST",
+          "url": "{{baseUrl}}/anything/orders",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "json",
+            "raw": "{\n  \"orderId\": \"{{$guid}}\",\n  \"customer\": \"{{username}}\",\n  \"items\": [\n    { \"sku\": \"BOOK-1\", \"qty\": 2, \"price\": 9.99 }\n  ],\n  \"total\": 19.98,\n  \"express\": true\n}",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_4ce77c174e24",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "200"
+            },
+            {
+              "id": "a_1e8a0e5a51b3",
+              "enabled": true,
+              "source": "header",
+              "property": "Content-Type",
+              "operator": "contains",
+              "expected": "application/json"
+            },
+            {
+              "id": "a_6e73cb90cf5c",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.json.customer",
+              "operator": "equals",
+              "expected": "{{username}}"
+            },
+            {
+              "id": "a_7aee17d44430",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.json.items[0].qty",
+              "operator": "equals",
+              "expected": "2"
+            },
+            {
+              "id": "a_32ada6636b61",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.json.total",
+              "operator": "gt",
+              "expected": "10"
+            },
+            {
+              "id": "a_9d1c7e00742b",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.json.express",
+              "operator": "isType",
+              "expected": "boolean"
+            },
+            {
+              "id": "a_4bf1bd9955f4",
+              "enabled": true,
+              "source": "responseTime",
+              "property": "",
+              "operator": "lt",
+              "expected": "2000"
+            },
+            {
+              "id": "a_7e452c6eb850",
+              "enabled": true,
+              "source": "schema",
+              "property": "",
+              "operator": "validSchema",
+              "expected": "{\n  \"type\": \"object\",\n  \"required\": [\n    \"method\",\n    \"json\"\n  ],\n  \"properties\": {\n    \"method\": {\n      \"const\": \"POST\"\n    },\n    \"json\": {\n      \"type\": \"object\",\n      \"required\": [\n        \"orderId\",\n        \"items\",\n        \"total\"\n      ],\n      \"properties\": {\n        \"orderId\": {\n          \"type\": \"string\",\n          \"format\": \"uuid\"\n        },\n        \"items\": {\n          \"type\": \"array\",\n          \"minItems\": 1\n        },\n        \"total\": {\n          \"type\": \"number\"\n        }\n      }\n    }\n  }\n}"
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        },
+        {
+          "id": "r_20c51482da66",
+          "type": "request",
+          "name": "Read a JSON document",
+          "description": "Click a value in the response tree to add an assertion or a capture for it.",
+          "method": "GET",
+          "url": "{{baseUrl}}/json",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "none",
+            "raw": "",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_5ee97f1c1bf7",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "200"
+            },
+            {
+              "id": "a_57c70a22f0db",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.store.name",
+              "operator": "equals",
+              "expected": "Book Corner"
+            },
+            {
+              "id": "a_e86e19c04387",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.store.open",
+              "operator": "equals",
+              "expected": "true"
+            },
+            {
+              "id": "a_201b5cd73fd8",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.store.books",
+              "operator": "lengthEquals",
+              "expected": "3"
+            },
+            {
+              "id": "a_10e62c7693c3",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.store.books[*].price",
+              "operator": "isType",
+              "expected": "array"
+            },
+            {
+              "id": "a_88efdc3edbf9",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.store.address.city",
+              "operator": "in",
+              "expected": "Springfield, Shelbyville"
+            },
+            {
+              "id": "a_cdb37b299937",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.updatedAt",
+              "operator": "matches",
+              "expected": "^\\d{4}-\\d{2}-\\d{2}T"
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        },
+        {
+          "id": "r_9a02eb3576c1",
+          "type": "request",
+          "name": "Expect an error status",
+          "description": "Tests can expect errors too: this request passes because the assertion expects 404.",
+          "method": "GET",
+          "url": "{{baseUrl}}/status/404",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "none",
+            "raw": "",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_7885e4752a0d",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "404"
+            },
+            {
+              "id": "a_82018fd134fc",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.statusText",
+              "operator": "equals",
+              "expected": "Not Found"
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "f_e540bb6a5985",
+      "type": "folder",
+      "name": "2. Login and chaining",
+      "description": "Captures store values from one response in variables; later requests use them as {{name}}. Run this folder in order.",
+      "auth": {
+        "type": "inherit",
+        "basic": {
+          "username": "",
+          "password": ""
+        },
+        "bearer": {
+          "token": ""
+        },
+        "apikey": {
+          "key": "X-API-Key",
+          "value": "",
+          "in": "header"
+        },
+        "oauth2": {
+          "grantType": "client_credentials",
+          "tokenUrl": "",
+          "clientId": "",
+          "clientSecret": "",
+          "scope": "",
+          "audience": "",
+          "username": "",
+          "password": "",
+          "clientAuth": "body"
+        }
+      },
+      "headers": [],
+      "variables": [],
+      "items": [
+        {
+          "id": "r_74f25aec8c5c",
+          "type": "request",
+          "name": "Log in (captures token)",
+          "description": "Logs in with the suite variables {{username}} and {{password}}. The Capture tab stores the token from the response in the variable {{token}}.",
+          "method": "POST",
+          "url": "{{baseUrl}}/login",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "json",
+            "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_fc5b6b46c97f",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "200"
+            },
+            {
+              "id": "a_af42a495f34c",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.token",
+              "operator": "exists",
+              "expected": ""
+            }
+          ],
+          "extract": [
+            {
+              "id": "x_30c567034913",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.token",
+              "variable": "token",
+              "scope": "runtime"
+            }
+          ],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        },
+        {
+          "id": "r_3f7bffe3f864",
+          "type": "request",
+          "name": "Get my profile (uses {{token}})",
+          "description": "Bearer auth with the captured {{token}}. Send \"Log in\" first, or run the whole folder.",
+          "method": "GET",
+          "url": "{{baseUrl}}/me",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "bearer",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": "{{token}}"
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "none",
+            "raw": "",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_158167a51c7c",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "200"
+            },
+            {
+              "id": "a_679b0fee1b58",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.username",
+              "operator": "equals",
+              "expected": "{{username}}"
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        },
+        {
+          "id": "r_0d83a8241ae8",
+          "type": "request",
+          "name": "Create a user (captures userId)",
+          "description": "Creates a user and captures its id as {{userId}} for the next requests.",
+          "method": "POST",
+          "url": "{{baseUrl}}/users",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "json",
+            "raw": "{\n  \"name\": \"Ada Lovelace\",\n  \"email\": \"{{$randomEmail}}\"\n}",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_7b3a9004eb20",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "201"
+            },
+            {
+              "id": "a_6adcf32145f3",
+              "enabled": true,
+              "source": "header",
+              "property": "Location",
+              "operator": "startsWith",
+              "expected": "/users/"
+            },
+            {
+              "id": "a_4b67a8a2de65",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.id",
+              "operator": "isType",
+              "expected": "number"
+            }
+          ],
+          "extract": [
+            {
+              "id": "x_45954bc276a4",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.id",
+              "variable": "userId",
+              "scope": "runtime"
+            }
+          ],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        },
+        {
+          "id": "r_b6ddde9d8dd0",
+          "type": "request",
+          "name": "Get the new user",
+          "description": "",
+          "method": "GET",
+          "url": "{{baseUrl}}/users/{{userId}}",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "none",
+            "raw": "",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_4c637d53b7fe",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "200"
+            },
+            {
+              "id": "a_274fd6d0d483",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.name",
+              "operator": "equals",
+              "expected": "Ada Lovelace"
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        },
+        {
+          "id": "r_1d261a188c8e",
+          "type": "request",
+          "name": "Rename the user",
+          "description": "",
+          "method": "PATCH",
+          "url": "{{baseUrl}}/users/{{userId}}",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "json",
+            "raw": "{\n  \"name\": \"Ada King\"\n}",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_27c7ba55b356",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "200"
+            },
+            {
+              "id": "a_29d854af2b3e",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.name",
+              "operator": "equals",
+              "expected": "Ada King"
+            },
+            {
+              "id": "a_e8b67eb905a2",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.updatedAt",
+              "operator": "exists",
+              "expected": ""
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        },
+        {
+          "id": "r_04267026b2c3",
+          "type": "request",
+          "name": "Delete the user",
+          "description": "",
+          "method": "DELETE",
+          "url": "{{baseUrl}}/users/{{userId}}",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "none",
+            "raw": "",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_43b31caddf5a",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "204"
+            },
+            {
+              "id": "a_e93e758d71ff",
+              "enabled": true,
+              "source": "size",
+              "property": "",
+              "operator": "equals",
+              "expected": "0"
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        },
+        {
+          "id": "r_8c3e70f97c0f",
+          "type": "request",
+          "name": "Deleted user is gone",
+          "description": "",
+          "method": "GET",
+          "url": "{{baseUrl}}/users/{{userId}}",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "none",
+            "raw": "",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_6e37408d8e70",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "404"
+            },
+            {
+              "id": "a_b1359f958707",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.error",
+              "operator": "contains",
+              "expected": "not found"
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "f_42c85a7ccbb9",
+      "type": "folder",
+      "name": "3. OAuth 2.0 and Basic auth",
+      "description": "This folder's Auth tab uses OAuth 2.0 client credentials: API Tester fetches a token from the token URL, caches it and sends it with every request in the folder. A request can still use its own auth. {{clientSecret}} is a secret variable: masked on screen and not exported unless you choose to.",
+      "auth": {
+        "type": "oauth2",
+        "basic": {
+          "username": "",
+          "password": ""
+        },
+        "bearer": {
+          "token": ""
+        },
+        "apikey": {
+          "key": "X-API-Key",
+          "value": "",
+          "in": "header"
+        },
+        "oauth2": {
+          "grantType": "client_credentials",
+          "tokenUrl": "{{baseUrl}}/auth/token",
+          "clientId": "{{clientId}}",
+          "clientSecret": "{{clientSecret}}",
+          "scope": "read",
+          "audience": "",
+          "username": "",
+          "password": "",
+          "clientAuth": "body"
+        }
+      },
+      "headers": [],
+      "variables": [],
+      "items": [
+        {
+          "id": "r_6095435d513d",
+          "type": "request",
+          "name": "Profile with an OAuth token",
+          "description": "Auth is \"Inherit\": the folder's OAuth 2.0 settings are used.",
+          "method": "GET",
+          "url": "{{baseUrl}}/me",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "none",
+            "raw": "",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_995346650664",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "200"
+            },
+            {
+              "id": "a_5952859a9664",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.authenticatedWith",
+              "operator": "equals",
+              "expected": "client_credentials"
+            },
+            {
+              "id": "a_ec8297259c02",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.scope",
+              "operator": "equals",
+              "expected": "read"
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        },
+        {
+          "id": "r_630ab3450735",
+          "type": "request",
+          "name": "See the Authorization header",
+          "description": "",
+          "method": "GET",
+          "url": "{{baseUrl}}/headers",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "none",
+            "raw": "",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_713f2d768ec5",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "200"
+            },
+            {
+              "id": "a_c28cbba19c49",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.headers.authorization",
+              "operator": "startsWith",
+              "expected": "Bearer "
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        },
+        {
+          "id": "r_3bd97cf33de4",
+          "type": "request",
+          "name": "Basic auth (overrides the folder)",
+          "description": "This request sets its own Basic auth instead of inheriting the folder's OAuth 2.0.",
+          "method": "GET",
+          "url": "{{baseUrl}}/basic-auth/{{username}}/{{password}}",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "basic",
+            "basic": {
+              "username": "{{username}}",
+              "password": "{{password}}"
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "none",
+            "raw": "",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_af010c0b4a75",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "200"
+            },
+            {
+              "id": "a_59fc2f02e5d9",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.authenticated",
+              "operator": "equals",
+              "expected": "true"
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "f_9978f7b87a02",
+      "type": "folder",
+      "name": "4. Forms, files and GraphQL",
+      "description": "Other body types. The echo server shows how it received each one.",
+      "auth": {
+        "type": "inherit",
+        "basic": {
+          "username": "",
+          "password": ""
+        },
+        "bearer": {
+          "token": ""
+        },
+        "apikey": {
+          "key": "X-API-Key",
+          "value": "",
+          "in": "header"
+        },
+        "oauth2": {
+          "grantType": "client_credentials",
+          "tokenUrl": "",
+          "clientId": "",
+          "clientSecret": "",
+          "scope": "",
+          "audience": "",
+          "username": "",
+          "password": "",
+          "clientAuth": "body"
+        }
+      },
+      "headers": [],
+      "variables": [],
+      "items": [
+        {
+          "id": "r_3db404381b5d",
+          "type": "request",
+          "name": "URL-encoded form",
+          "description": "",
+          "method": "POST",
+          "url": "{{baseUrl}}/anything/form",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "form",
+            "raw": "",
+            "form": [
+              {
+                "key": "name",
+                "value": "Ada",
+                "enabled": true,
+                "description": ""
+              },
+              {
+                "key": "city",
+                "value": "London",
+                "enabled": true,
+                "description": ""
+              },
+              {
+                "key": "newsletter",
+                "value": "yes",
+                "enabled": false,
+                "description": ""
+              }
+            ],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_61dc071eb3ca",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "200"
+            },
+            {
+              "id": "a_f54addb50100",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.form.city",
+              "operator": "equals",
+              "expected": "London"
+            },
+            {
+              "id": "a_ef37a9519ef8",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.form.newsletter",
+              "operator": "notExists",
+              "expected": ""
+            },
+            {
+              "id": "a_ed0e360a5662",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.headers['content-type']",
+              "operator": "contains",
+              "expected": "x-www-form-urlencoded"
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        },
+        {
+          "id": "r_2134863c7473",
+          "type": "request",
+          "name": "Multipart form with a file",
+          "description": "To upload a file: pick one in the \"attachment\" row and enable the row. The echo server then lists it under \"files\".",
+          "method": "POST",
+          "url": "{{baseUrl}}/anything/upload",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "multipart",
+            "raw": "",
+            "form": [],
+            "multipart": [
+              {
+                "key": "title",
+                "type": "text",
+                "value": "Quarterly report",
+                "filePath": "",
+                "contentType": "",
+                "enabled": true
+              },
+              {
+                "key": "pages",
+                "type": "text",
+                "value": "12",
+                "filePath": "",
+                "contentType": "",
+                "enabled": true
+              },
+              {
+                "key": "attachment",
+                "type": "file",
+                "value": "",
+                "filePath": "",
+                "contentType": "",
+                "enabled": false
+              }
+            ],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_97eecc359c56",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "200"
+            },
+            {
+              "id": "a_061dfda57c6a",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.form.title",
+              "operator": "equals",
+              "expected": "Quarterly report"
+            },
+            {
+              "id": "a_8ea823a57c3c",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.headers['content-type']",
+              "operator": "startsWith",
+              "expected": "multipart/form-data"
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        },
+        {
+          "id": "r_790b2a7a0096",
+          "type": "request",
+          "name": "GraphQL query",
+          "description": "GraphQL mode sends {\"query\": ..., \"variables\": ...} as JSON.",
+          "method": "POST",
+          "url": "{{baseUrl}}/anything/graphql",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "graphql",
+            "raw": "",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "query Books($limit: Int) {\n  books(limit: $limit) {\n    id\n    title\n    author\n  }\n}",
+              "variables": "{\n  \"limit\": 2\n}"
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_231ba8498922",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "200"
+            },
+            {
+              "id": "a_6b8c8208b907",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.json.query",
+              "operator": "contains",
+              "expected": "books"
+            },
+            {
+              "id": "a_2b4653343b97",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.json.variables.limit",
+              "operator": "equals",
+              "expected": "2"
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "f_2033508bccff",
+      "type": "folder",
+      "name": "5. Responses, cookies and redirects",
+      "description": "",
+      "auth": {
+        "type": "inherit",
+        "basic": {
+          "username": "",
+          "password": ""
+        },
+        "bearer": {
+          "token": ""
+        },
+        "apikey": {
+          "key": "X-API-Key",
+          "value": "",
+          "in": "header"
+        },
+        "oauth2": {
+          "grantType": "client_credentials",
+          "tokenUrl": "",
+          "clientId": "",
+          "clientSecret": "",
+          "scope": "",
+          "audience": "",
+          "username": "",
+          "password": "",
+          "clientAuth": "body"
+        }
+      },
+      "headers": [],
+      "variables": [],
+      "items": [
+        {
+          "id": "r_2a031174ed4f",
+          "type": "request",
+          "name": "XML response",
+          "description": "",
+          "method": "GET",
+          "url": "{{baseUrl}}/xml",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "none",
+            "raw": "",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_4650622abb70",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "200"
+            },
+            {
+              "id": "a_f3553e3a2335",
+              "enabled": true,
+              "source": "contentType",
+              "property": "",
+              "operator": "contains",
+              "expected": "xml"
+            },
+            {
+              "id": "a_19562f96c082",
+              "enabled": true,
+              "source": "body",
+              "property": "",
+              "operator": "contains",
+              "expected": "<title>Clean Code</title>"
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        },
+        {
+          "id": "r_ceac03a7d1e6",
+          "type": "request",
+          "name": "Image response",
+          "description": "Images are shown in the Preview tab.",
+          "method": "GET",
+          "url": "{{baseUrl}}/image.png",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "none",
+            "raw": "",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_126c4fdc15ad",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "200"
+            },
+            {
+              "id": "a_ff46cbee1860",
+              "enabled": true,
+              "source": "contentType",
+              "property": "",
+              "operator": "equals",
+              "expected": "image/png"
+            },
+            {
+              "id": "a_1aa69ff7410e",
+              "enabled": true,
+              "source": "size",
+              "property": "",
+              "operator": "gt",
+              "expected": "100"
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        },
+        {
+          "id": "r_fc29889f2eb7",
+          "type": "request",
+          "name": "Set a cookie",
+          "description": "The server sets a cookie. API Tester keeps cookies per suite and sends them back, like a browser.",
+          "method": "GET",
+          "url": "{{baseUrl}}/cookies/set",
+          "params": [
+            {
+              "key": "session",
+              "value": "abc123",
+              "enabled": true,
+              "description": ""
+            }
+          ],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "none",
+            "raw": "",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_7d3ff8ab240f",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "200"
+            },
+            {
+              "id": "a_c6a4a16363d7",
+              "enabled": true,
+              "source": "header",
+              "property": "Set-Cookie",
+              "operator": "contains",
+              "expected": "session=abc123"
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        },
+        {
+          "id": "r_dd86e2145a7e",
+          "type": "request",
+          "name": "Cookie is sent back",
+          "description": "Send \"Set a cookie\" first. The Cookies tab of the Environments dialog lists and clears stored cookies.",
+          "method": "GET",
+          "url": "{{baseUrl}}/cookies",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "none",
+            "raw": "",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_cb4100fcf387",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "200"
+            },
+            {
+              "id": "a_cd981eac6d46",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.cookies.session",
+              "operator": "equals",
+              "expected": "abc123"
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        },
+        {
+          "id": "r_8a301f95b8a4",
+          "type": "request",
+          "name": "Redirects are followed",
+          "description": "Two redirects, then /anything. The Timeline tab lists the redirects. Turn off \"Follow redirects\" in this request's Settings tab to see the 302.",
+          "method": "GET",
+          "url": "{{baseUrl}}/redirect/2",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "none",
+            "raw": "",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_f7dcc0215122",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "200"
+            },
+            {
+              "id": "a_da5bb2e26a14",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.path",
+              "operator": "equals",
+              "expected": "/anything"
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        },
+        {
+          "id": "r_2d1e8886c2cb",
+          "type": "request",
+          "name": "Compressed response",
+          "description": "",
+          "method": "GET",
+          "url": "{{baseUrl}}/gzip",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "none",
+            "raw": "",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_0086e19b6681",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "200"
+            },
+            {
+              "id": "a_809d4f88be37",
+              "enabled": true,
+              "source": "header",
+              "property": "Content-Encoding",
+              "operator": "equals",
+              "expected": "gzip"
+            },
+            {
+              "id": "a_4c92fddbc0cc",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.gzipped",
+              "operator": "equals",
+              "expected": "true"
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        },
+        {
+          "id": "r_fd56b593b599",
+          "type": "request",
+          "name": "Slow response",
+          "description": "The server waits 300 ms. This request has its own timeout of 5 seconds (Settings tab).",
+          "method": "GET",
+          "url": "{{baseUrl}}/delay/300",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "none",
+            "raw": "",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_de96f544e68d",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "200"
+            },
+            {
+              "id": "a_8fecd80a902c",
+              "enabled": true,
+              "source": "responseTime",
+              "property": "",
+              "operator": "gte",
+              "expected": "300"
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": 5000,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        }
+      ]
+    },
+    {
+      "id": "f_72e963f9e4e1",
+      "type": "folder",
+      "name": "6. Data-driven and scripts",
+      "description": "In the Runner, choose a CSV or JSON data file: the requests run once per row and each column is a variable.",
+      "auth": {
+        "type": "inherit",
+        "basic": {
+          "username": "",
+          "password": ""
+        },
+        "bearer": {
+          "token": ""
+        },
+        "apikey": {
+          "key": "X-API-Key",
+          "value": "",
+          "in": "header"
+        },
+        "oauth2": {
+          "grantType": "client_credentials",
+          "tokenUrl": "",
+          "clientId": "",
+          "clientSecret": "",
+          "scope": "",
+          "audience": "",
+          "username": "",
+          "password": "",
+          "clientAuth": "body"
+        }
+      },
+      "headers": [],
+      "variables": [],
+      "items": [
+        {
+          "id": "r_8fc1bd8c3d12",
+          "type": "request",
+          "name": "Create a user from data row",
+          "description": "Uses {{name}} and {{email}}. Without a data file the suite variables are used. In the Runner, load a CSV with the columns name,email (like sample-users.csv) to create one user per row.",
+          "method": "POST",
+          "url": "{{baseUrl}}/users",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "json",
+            "raw": "{\n  \"name\": \"{{name}}\",\n  \"email\": \"{{email}}\"\n}",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_e1f880f58355",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "201"
+            },
+            {
+              "id": "a_fe45d6ccf725",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.name",
+              "operator": "equals",
+              "expected": "{{name}}"
+            },
+            {
+              "id": "a_c6cbbcc0b76c",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.email",
+              "operator": "equals",
+              "expected": "{{email}}"
+            }
+          ],
+          "extract": [
+            {
+              "id": "x_3588c76b0663",
+              "enabled": true,
+              "source": "jsonpath",
+              "property": "$.id",
+              "variable": "createdUserId",
+              "scope": "runtime"
+            }
+          ],
+          "scripts": {
+            "pre": "",
+            "post": ""
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        },
+        {
+          "id": "r_2221e4e22ff0",
+          "type": "request",
+          "name": "Scripts: before and after",
+          "description": "Optional JavaScript. The pre-request script adds a header and stores a variable; the post-response script runs test() checks (shown in the Tests tab) and writes to the Console tab.",
+          "method": "POST",
+          "url": "{{baseUrl}}/anything/scripts",
+          "params": [],
+          "headers": [],
+          "auth": {
+            "type": "inherit",
+            "basic": {
+              "username": "",
+              "password": ""
+            },
+            "bearer": {
+              "token": ""
+            },
+            "apikey": {
+              "key": "X-API-Key",
+              "value": "",
+              "in": "header"
+            },
+            "oauth2": {
+              "grantType": "client_credentials",
+              "tokenUrl": "",
+              "clientId": "",
+              "clientSecret": "",
+              "scope": "",
+              "audience": "",
+              "username": "",
+              "password": "",
+              "clientAuth": "body"
+            }
+          },
+          "body": {
+            "mode": "json",
+            "raw": "{\n  \"hello\": \"scripts\"\n}",
+            "form": [],
+            "multipart": [],
+            "binaryPath": "",
+            "graphql": {
+              "query": "",
+              "variables": ""
+            }
+          },
+          "assertions": [
+            {
+              "id": "a_4d1c01eea07b",
+              "enabled": true,
+              "source": "status",
+              "property": "",
+              "operator": "equals",
+              "expected": "200"
+            }
+          ],
+          "extract": [],
+          "scripts": {
+            "pre": "// Runs before the request is sent: change the request or set variables.\nconst traceId = \"trace-\" + Date.now();\nvars.set(\"traceId\", traceId);\nrequest.headers[\"X-Trace-Id\"] = traceId;\nconsole.log(\"Sending with trace id\", traceId);",
+            "post": "// Runs after the response arrives. test() results appear in the Tests tab.\nconst data = response.json();\ntest(\"status is 200\", () => {\n    expect(response.status).toBe(200);\n});\ntest(\"the trace id header was sent\", () => {\n    expect(data.headers[\"x-trace-id\"]).toBe(vars.get(\"traceId\"));\n});\ntest(\"body was echoed\", () => {\n    expect(data.json).toHaveProperty(\"hello\");\n    expect(data.json.hello).toEqual(\"scripts\");\n});\nconsole.log(\"Echoed path:\", data.path);"
+          },
+          "settings": {
+            "timeoutMs": null,
+            "followRedirects": null,
+            "verifyTls": null
+          }
+        }
+      ]
+    }
+  ]
+}

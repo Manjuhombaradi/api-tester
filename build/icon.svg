@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f766e"/>
+      <stop offset="1" stop-color="#0c4a6e"/>
+    </linearGradient>
+    <linearGradient id="badge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4ade80"/>
+      <stop offset="1" stop-color="#16a34a"/>
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#bg)"/>
+  <!-- request arrow (one path with group opacity, so overlapping strokes do not get brighter) -->
+  <g opacity="0.5" fill="none" stroke="#ffffff" stroke-width="30" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M300 250 H 718 M656 194 L 722 250 L 656 306"/>
+  </g>
+  <!-- curly braces around API -->
+  <text x="512" y="610" text-anchor="middle" font-family="Helvetica Neue, Arial, sans-serif" font-weight="800" font-size="300" fill="#ffffff" letter-spacing="-6">API</text>
+  <text x="140" y="600" text-anchor="start" font-family="Menlo, Consolas, monospace" font-weight="700" font-size="250" fill="rgba(255,255,255,0.40)">{</text>
+  <text x="884" y="600" text-anchor="end" font-family="Menlo, Consolas, monospace" font-weight="700" font-size="250" fill="rgba(255,255,255,0.40)">}</text>
+  <!-- passed check -->
+  <circle cx="512" cy="790" r="112" fill="url(#badge)" stroke="#ffffff" stroke-width="20"/>
+  <path d="M458 792 L 498 832 L 572 752" fill="none" stroke="#ffffff" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

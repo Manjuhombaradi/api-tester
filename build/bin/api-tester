@@ -1,0 +1,28 @@
+#!/bin/sh
+# API Tester command line for macOS (installed as API Tester.app/Contents/Resources/bin/api-tester).
+# Runs the app's CLI with Electron's built-in Node.js, without opening a window:
+#   "/Applications/API Tester.app/Contents/Resources/bin/api-tester" run suite.apisuite --env Staging
+# Shorter: sudo ln -sf "/Applications/API Tester.app/Contents/Resources/bin/api-tester" /usr/local/bin/api-tester
+SELF="$0"
+# follow symbolic links (e.g. /usr/local/bin/api-tester -> this file) to find the app
+while [ -L "$SELF" ]; do
+    LINK="$(readlink "$SELF")"
+    case "$LINK" in
+        /*) SELF="$LINK" ;;
+        *) SELF="$(dirname "$SELF")/$LINK" ;;
+    esac
+done
+HERE="$(cd "$(dirname "$SELF")" && pwd -P)"
+CONTENTS="$(cd "$HERE/../.." && pwd -P)"
+BIN="$CONTENTS/MacOS/API Tester"
+# app.asar is an archive file: Electron's Node.js reads src/cli.js from inside it
+if [ -f "$CONTENTS/Resources/app.asar" ]; then
+    CLI="$CONTENTS/Resources/app.asar/src/cli.js"
+else
+    CLI="$CONTENTS/Resources/app/src/cli.js"
+fi
+if [ ! -x "$BIN" ]; then
+    echo "API Tester: app binary not found at $BIN" >&2
+    exit 2
+fi
+ELECTRON_RUN_AS_NODE=1 exec "$BIN" "$CLI" "$@"
