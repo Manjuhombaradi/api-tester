@@ -208,7 +208,14 @@
     "name": "API Tester",
     "email": "noreply@api-tester.local"
   },
-  "homepage": "https://github.com/your-org/api-tester",
+  "homepage": "https://github.com/Manjuhombaradi/api-tester",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Manjuhombaradi/api-tester.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Manjuhombaradi/api-tester/issues"
+  },
   "dependencies": {
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",

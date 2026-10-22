@@ -5,6 +5,8 @@ with no-code assertions, chain requests by capturing values, run whole suites (a
 and share your suites with anyone as a single file. It runs on Windows, macOS and Linux, works offline,
 and has a command line version for CI pipelines.
 
+**Download:** [latest release](https://github.com/Manjuhombaradi/api-tester/releases/latest) (Windows, macOS, Linux installers) · [source](https://github.com/Manjuhombaradi/api-tester)
+
 ---
 
 ## 1. Download and start
@@ -235,7 +237,7 @@ and pass it with `--var token=…`.
 ```yaml
 - name: API tests
   run: |
-    docker build -t api-tester https://github.com/<you>/api-tester.git   # your copy of this repository
+    docker build -t api-tester https://github.com/Manjuhombaradi/api-tester.git
     docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" api-tester \
       run tests/my-api.apisuite --env CI --var token=${{ secrets.API_TOKEN }} --reporter cli,junit --out reports
 ```

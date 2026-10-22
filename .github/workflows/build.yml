@@ -60,6 +60,12 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
       # the Linux packages start through the launcher script written by build/afterPack.js
+      # the launcher checks for the app's system libraries first (desktop distributions have them)
+      - name: Install runtime libraries for the Linux smoke test
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libgtk-3-0 libnss3 libgbm1 libxss1 libxtst6 libasound2t64 || sudo apt-get install -y -qq libgtk-3-0 libnss3 libgbm1 libxss1 libxtst6 libasound2
       - name: Smoke test the Linux launcher (command line version, no display)
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -145,4 +151,4 @@ jobs:
             | Linux (AppImage) | `./API-Tester-*.AppImage run my-suite.apisuite` |
             | macOS | `"/Applications/API Tester.app/Contents/Resources/bin/api-tester" run my-suite.apisuite` |
             | Windows (installer) | `"%LOCALAPPDATA%\Programs\api-tester\bin\api-tester.cmd" run my-suite.apisuite` |
-            | Docker | `docker run --rm -v "$PWD:/work" api-tester run /work/my-suite.apisuite` |
+            | Docker | `docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" api-tester run my-suite.apisuite` |
