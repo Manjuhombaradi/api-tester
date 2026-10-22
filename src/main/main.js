@@ -4,7 +4,46 @@
 const path = require("path");
 const fs = require("fs");
 const { fileURLToPath } = require("url");
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme, screen } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, nativeTheme, screen, session, safeStorage } = require("electron");
+
+// ------------------------------------------------------------------ no network traffic of its own
+// API Tester contacts nothing by itself (no updates, telemetry or crash reports): requests go only where the
+// user sends them, from Node.js in this process (not through Chromium). Chromium's background services are
+// switched off. Its Hunspell spell checker (Windows, Linux) downloaded a dictionary from Google's CDN as soon as
+// the default session started (measured in the 1.0.0 security review): no spell check languages, and a
+// download address on this computer that nothing answers, so no request can leave the machine.
+for (const name of ["disable-background-networking", "disable-component-update", "disable-domain-reliability", "no-pings"]) {
+    app.commandLine.appendSwitch(name);
+}
+const NO_DOWNLOAD_URL = "http://127.0.0.1:9/";
+
+/** True for the app's own page (loaded from the app folder). */
+function isAppPage(contents) {
+    try {
+        return !!contents && !contents.isDestroyed() && String(contents.getURL()).startsWith("file://");
+    } catch (_) {
+        return false;
+    }
+}
+
+function hardenSession(s) {
+    try { s.setSpellCheckerDictionaryDownloadURL(NO_DOWNLOAD_URL); } catch (_) { /* not available */ }
+    // macOS uses its own spell checker (no download); there this call does nothing
+    if (process.platform !== "darwin") { try { s.setSpellCheckerLanguages([]); } catch (_) { /* not available */ } }
+    try { s.setSpellCheckerEnabled(false); } catch (_) { /* not available */ }
+    // the page needs no web permissions (camera, microphone, location, notifications, reading the clipboard ...);
+    // only writing to the clipboard, for the Copy buttons of the app's own page
+    const allowed = (contents, permission) => permission === "clipboard-sanitized-write" && isAppPage(contents);
+    s.setPermissionRequestHandler((contents, permission, callback) => callback(allowed(contents, permission)));
+    s.setPermissionCheckHandler((contents, permission) => allowed(contents, permission));
+    s.setDevicePermissionHandler(() => false);
+}
+app.on("session-created", hardenSession);
+// no <webview>, no pop-up windows, in any web contents
+app.on("web-contents-created", (_e, contents) => {
+    contents.on("will-attach-webview", (e) => e.preventDefault());
+    contents.setWindowOpenHandler(() => ({ action: "deny" }));
+});
 
 // ------------------------------------------------------------------ early process setup
 // Arguments after the executable (dev: electron <app folder> <args>; packaged: <app> <args>).
@@ -16,6 +55,17 @@ const NO_DISPLAY = process.platform === "linux" && !process.env.DISPLAY && !proc
 const IGNORED_SWITCH = /^(--(no-sandbox|disable-gpu|disable-gpu-sandbox|in-process-gpu|enable-logging|cli|ozone-platform(=.*)?|inspect(-brk)?(=.*)?|remote-debugging-port=.*|allow-file-access-from-files|original-process-start-time=.*)|-psn_.*)$/;
 // Files the window can import when given on the command line or opened from the file manager.
 const OPENABLE_FILE = /\.(apisuite|json|ya?ml)$/i;
+// Developer tools: when run from source. Installed builds have none (no menu entry, no shortcut) unless started
+// with API_TESTER_DEVTOOLS=1, for support and troubleshooting.
+const DEVTOOLS = !app.isPackaged || process.env.API_TESTER_DEVTOOLS === "1";
+// Remote debugging (--remote-debugging-port / --remote-debugging-pipe) would let another program run code in the
+// app's page, with its access to saved suites and secrets: refused in installed builds, like the developer tools.
+if (!DEVTOOLS && ["remote-debugging-port", "remote-debugging-pipe"].some((name) => app.commandLine.hasSwitch(name))) {
+    process.stderr.write("API Tester: remote debugging (--remote-debugging-port / --remote-debugging-pipe) is not allowed in installed builds. "
+        + "For support and troubleshooting, start it with the environment variable API_TESTER_DEVTOOLS=1.\n");
+    app.exit(1);
+    process.exit(1); // app.exit() only takes effect once the event loop runs: stop before anything else starts
+}
 
 function isCliInvocation(args) {
     if (args.includes("--cli")) return true;
@@ -35,7 +85,11 @@ if (CLI_MODE) {
 }
 // Electron has already turned this (set by the Linux launcher) into its --no-sandbox switch; do not pass it on
 // to programs the app opens (file manager, browser), which would otherwise run their own sandbox disabled.
+// The launcher's reason (API_TESTER_SANDBOX_DISABLED) goes into the app's log once the logger is ready.
+const SANDBOX_DISABLED_REASON = String(process.env.API_TESTER_SANDBOX_DISABLED || (app.commandLine.hasSwitch("no-sandbox") ? "started with --no-sandbox" : ""))
+    .replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 200);
 delete process.env.ELECTRON_DISABLE_SANDBOX;
+delete process.env.API_TESTER_SANDBOX_DISABLED;
 
 if (CLI_MODE) runCommandLine();
 else startDesktop();
@@ -78,22 +132,26 @@ function startDesktop() {
     }
 
     const { createLogger } = require("./logger");
-    const { Workspace } = require("./workspace");
+    const { Workspace, ensurePrivateDir, PRIVATE_FILE_MODE } = require("./workspace");
     const { createApi } = require("./ipc");
 
     const dataDir = app.getPath("userData");
     const logDir = path.join(dataDir, "logs");
     const windowStateFile = path.join(dataDir, "window-state.json");
+    // suites, history and logs can hold credentials: only this user may open the folders
+    ensurePrivateDir(dataDir);
+    ensurePrivateDir(logDir);
     const log = createLogger(logDir);
     process.on("uncaughtException", (err) => log.error(`Unexpected error: ${(err && err.stack) || err}`));
     process.on("unhandledRejection", (err) => log.error(`Unhandled promise rejection: ${(err && err.stack) || err}`));
     log.info(`API Tester ${app.getVersion()} starting (${process.platform}-${process.arch}, Electron ${process.versions.electron}${app.isPackaged ? "" : ", from source"})`);
+    if (DEVTOOLS && app.isPackaged) log.info("Developer tools are enabled (API_TESTER_DEVTOOLS=1)");
+    if (SANDBOX_DISABLED_REASON) log.warn(`Chromium sandbox disabled (${SANDBOX_DISABLED_REASON}). See SECURITY.md (Linux sandbox).`);
 
     if (process.platform === "win32") app.setAppUserModelId("com.apitester.app");
 
-    const workspace = new Workspace(dataDir, { log });
-    workspace.load(); // read once at startup (small file; the window's first call gets it from memory)
-    nativeTheme.themeSource = workspace.settings.theme;
+    // read once the app is ready (decrypting saved secrets needs the system keychain), before the window opens
+    const workspace = new Workspace(dataDir, { log, secretStore: createSecretStore(log) });
 
     let mainWindow = null;
     const pendingFiles = []; // files to import once the page listens for "open-file"
@@ -153,6 +211,7 @@ function startDesktop() {
 
     function openFile(file) {
         log.info(`Opening ${file}`);
+        api.allowImport(file); // chosen by the user in the file manager or on the command line
         pendingFiles.push(file);
         deliverFiles();
         showWindow();
@@ -170,7 +229,10 @@ function startDesktop() {
     }
 
     const first = fileArg(cliArgs);
-    if (first && first.file) pendingFiles.push(first.file);
+    if (first && first.file) {
+        api.allowImport(first.file);
+        pendingFiles.push(first.file);
+    }
     if (first && first.error) startupError = first.error;
 
     app.on("second-instance", (_e, argv, workingDirectory) => {
@@ -208,8 +270,8 @@ function startDesktop() {
 
     function writeWindowState(state) {
         try {
-            fs.mkdirSync(dataDir, { recursive: true });
-            fs.writeFileSync(windowStateFile, JSON.stringify(state));
+            ensurePrivateDir(dataDir);
+            fs.writeFileSync(windowStateFile, JSON.stringify(state), { mode: PRIVATE_FILE_MODE });
         } catch (err) {
             log.warn(`Window position not saved: ${err.message}`);
         }
@@ -257,7 +319,9 @@ function startDesktop() {
                 contextIsolation: true,
                 nodeIntegration: false,
                 sandbox: true,
-                spellcheck: false
+                spellcheck: false,
+                webviewTag: false,
+                devTools: DEVTOOLS
             }
         });
         mainWindow = win;
@@ -281,11 +345,8 @@ function startDesktop() {
         });
 
         const wc = win.webContents;
-        // external links open in the browser, never inside the app
-        wc.setWindowOpenHandler(({ url }) => {
-            if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
-            return { action: "deny" };
-        });
+        // the page opens no windows (links to the web are not part of the app): every window.open is refused
+        wc.setWindowOpenHandler(() => ({ action: "deny" }));
         // dropped files and links must not replace the app page (the page handles drops itself). Reloading the
         // app page is fine: location.reload() (the "Try again" button of the startup error screen) arrives here too.
         const withoutHash = (u) => String(u || "").replace(/[?#].*$/, "");
@@ -423,7 +484,8 @@ function startDesktop() {
                     { label: "Toggle Light / Dark Theme", accelerator: "CmdOrCtrl+Shift+L", click: cmd("toggleTheme") },
                     sep,
                     { role: "reload", accelerator: "CmdOrCtrl+Alt+R" },
-                    { role: "toggleDevTools" },
+                    // installed builds: only for support, with API_TESTER_DEVTOOLS=1
+                    ...(DEVTOOLS ? [{ role: "toggleDevTools" }] : []),
                     sep,
                     { role: "resetZoom" }, { role: "zoomIn" }, { role: "zoomOut" },
                     sep,
@@ -447,7 +509,10 @@ function startDesktop() {
     }
 
     // ------------------------------------------------------------------ lifecycle
-    app.whenReady().then(() => {
+    app.whenReady().then(async () => {
+        hardenSession(session.defaultSession); // also done on "session-created"; repeated here on purpose
+        await workspace.loadAsync(); // small file; the window's first call gets it from memory
+        nativeTheme.themeSource = workspace.settings.theme;
         buildMenu();
         if (!mainWindow) createWindow(); // an open-file / second-instance event may have created it already
         app.on("activate", () => {
@@ -494,6 +559,44 @@ function startDesktop() {
     });
 
     // ------------------------------------------------------------------ helpers
+    /**
+     * Encryption of the secrets in workspace.json with Electron's safeStorage: macOS Keychain, Windows DPAPI
+     * (bound to this user and computer), Linux Secret Service / KWallet. Linux without a keyring ("basic_text")
+     * counts as not available: the values are then saved unencrypted, in a file only this user can read. The
+     * keychain is only asked once there is something to encrypt or decrypt.
+     */
+    function createSecretStore(logger) {
+        let available = null;
+        const plainTextOnly = () => {
+            if (process.platform !== "linux") return false;
+            try { return ["basic_text", "unknown"].includes(safeStorage.getSelectedStorageBackend()); } catch (_) { return true; }
+        };
+        const note = () => {
+            if (!available) logger.warn("No system keychain available: secrets are saved unencrypted in workspace.json (readable only by this user account)");
+        };
+        return {
+            async available() {
+                if (available === null) {
+                    try { available = !!(await safeStorage.isAsyncEncryptionAvailable()) && !plainTextOnly(); } catch (_) { available = false; }
+                    note();
+                }
+                return available;
+            },
+            availableSync() {
+                if (available === null && app.isReady()) {
+                    try { available = !!safeStorage.isEncryptionAvailable() && !plainTextOnly(); } catch (_) { available = false; }
+                    note();
+                }
+                return !!available;
+            },
+            encrypt: async (text) => (await safeStorage.encryptStringAsync(text)).toString("base64"),
+            decrypt: async (base64) => (await safeStorage.decryptStringAsync(Buffer.from(base64, "base64"))).result,
+            // only for the last write while quitting (the asynchronous one did not finish in time)
+            encryptSync: (text) => safeStorage.encryptString(text).toString("base64"),
+            decryptSync: (base64) => safeStorage.decryptString(Buffer.from(base64, "base64"))
+        };
+    }
+
     // Shell-ready command that runs the CLI of this installation (shown in the runner and in Help).
     function cliCommand() {
         const quote = (s) => (/[\s"'&()]/.test(s) ? `"${s}"` : s);

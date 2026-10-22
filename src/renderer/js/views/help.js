@@ -1,7 +1,7 @@
 "use strict";
 /*
  * Built-in guide: getting started, shortcuts, variables (+ dynamic variables from main), assertions, captures,
- * scripts, runner & data files, command line / CI, sharing suites, troubleshooting.
+ * scripts, runner & data files, command line / CI, sharing suites, security & privacy, troubleshooting.
  * Help.open(topic?)   topic: one of the TOPICS ids
  */
 (function () {
@@ -58,9 +58,10 @@
         { id: "runner", title: "Runner & data files", icon: "runner" },
         { id: "cli", title: "Command line & CI", icon: "code" },
         { id: "sharing", title: "Sharing suites", icon: "export" },
+        { id: "security", title: "Security & privacy", icon: "lock" },
         { id: "troubleshooting", title: "Troubleshooting", icon: "help" }
     ];
-    const TOPIC_ALIASES = { shortcut: "shortcuts", keys: "shortcuts", variable: "variables", environments: "variables", assertion: "assertions", tests: "assertions", capture: "captures", extract: "captures", script: "scripts", run: "runner", data: "runner", ci: "cli", share: "sharing", import: "sharing", export: "sharing", about: "troubleshooting" };
+    const TOPIC_ALIASES = { shortcut: "shortcuts", keys: "shortcuts", variable: "variables", environments: "variables", assertion: "assertions", tests: "assertions", capture: "captures", extract: "captures", script: "scripts", run: "runner", data: "runner", ci: "cli", share: "sharing", import: "sharing", export: "sharing", privacy: "security", tls: "security", about: "troubleshooting" };
 
     let openPromise = null;
 
@@ -106,7 +107,7 @@
                 h("div", { class: "row wrap" },
                     button("Show the welcome screen", () => { closeHelp(); setTimeout(() => Welcome.show(), 0); }, "btn small primary"),
                     button("Open data folder", () => attempt(() => call("app.openDataFolder")))),
-                p(h("span", { class: "muted small" }, `Version ${info.version || "?"} · ${info.platform || ""}${info.dataDir ? ` · data in ${info.dataDir}` : ""}`))
+                p(h("span", { class: "muted small" }, `Version ${info.version || "?"} · by Manjunagouda Hombaradi (manjuhombaradi@gmail.com) · ${info.platform || ""}${info.dataDir ? ` · data in ${info.dataDir}` : ""}`))
             ],
 
             shortcuts: () => [
@@ -294,6 +295,7 @@
                     [h("b", null, "Export"), " (top bar, or the suite's ⋯ menu) saves the suite as a ", code(".apisuite"), " file: folders, requests, assertions, captures, scripts, variables and, if you choose, environments."],
                     ["Secret values are ", h("b", null, "left out"), " unless you tick “Include secret values”. The receiver sees which ones to fill in."],
                     [h("b", null, "Import"), " the file on any machine — or double-click it, or drop it on the window. Importing the same suite again lets you keep both or replace yours."],
+                    ["Before you import, the preview lists what a suite from someone else would do: upload files from your computer, run scripts, or turn off TLS certificate checks. Importing runs and sends nothing."],
                     ["The file is readable JSON, so it works well in Git: commit it next to your code and run it in CI with the command line."],
                     "Globals, history and captured runtime values stay on your machine."),
                 title("Import from other tools"),
@@ -304,11 +306,27 @@
                 h("div", { class: "row wrap" }, button("Import…", () => { closeHelp(); setTimeout(() => ImportExport.openImport(), 0); }))
             ],
 
+            security: () => [
+                title("Security & privacy"),
+                ul(
+                    [h("b", null, "No connections of its own"), " — API Tester connects only to the servers you send requests to. There are no update checks, telemetry or crash reports, and the window does not load anything from the internet."],
+                    [h("b", null, "Local files"), " — a request uploads a file from this computer (multipart file field or binary body) only when you chose that file in the app, or allowed it when asked. Suites from other people can name any file (for example SSH keys), so API Tester shows the path and the server and waits for ",
+                        h("b", null, "Allow once"), " or ", h("b", null, "Always for this suite"), ". Allowed files are remembered on this computer only; remove one with ", h("b", null, "Forget"), " in the request's Body tab."],
+                    [h("b", null, "Saved secrets"), " — passwords, tokens, API keys, secret variables and the proxy password are encrypted with the system keychain (macOS Keychain, Windows, GNOME Keyring / KWallet) when one is available. The data folder and its files can only be opened by your user account. Exported suites leave secret values out unless you include them."],
+                    [h("b", null, "TLS certificates"), " — requests show ", h("b", null, "TLS not verified"), " when certificate checks are off. Settings → ", h("b", null, "Enforce TLS verification"), " keeps them on for every request, whatever a request or an imported suite says."],
+                    [h("b", null, "Echo server"), " — the built-in test API starts only when you start it (Settings, status bar, sample suite) and accepts connections from this computer only."],
+                    [h("b", null, "Reports and history"), " — authorization headers, cookies, tokens and secret variables are masked (•••••)."]),
+                p("Security teams: see SECURITY.md in the project repository for the network behaviour, stored data and a hardening guide."),
+                h("div", { class: "row wrap" }, button("Open Settings", () => { closeHelp(); setTimeout(() => Settings.open(), 0); }))
+            ],
+
             troubleshooting: () => [
                 title("Troubleshooting"),
                 ul(
                     [h("b", null, "Red {{name}} / “unresolved variable”"), " — the variable is not defined in the active environment, suite, folder or globals. Check the environment selector in the top bar."],
-                    [h("b", null, "Certificate errors (self-signed, expired)"), " — turn off “Verify TLS” for the request (Settings tab) or in Settings for all requests. Use this only for test servers."],
+                    [h("b", null, "Certificate errors (self-signed, expired)"), " — turn off “Verify TLS” for the request (Settings tab) or in Settings for all requests. Use this only for test servers. With Settings → Enforce TLS verification on, certificates are always checked."],
+                    [h("b", null, "“Not sent: a local file needs your OK”"), " — the request uploads a file you did not choose in this app (e.g. from an imported suite). Press Send and allow it, or choose the file again in the Body tab."],
+                    [h("b", null, "Sample requests fail with “Connection refused”"), " — the echo server is not running: start it from the status bar (bottom left) or turn on “Start the echo server when the app opens” in Settings."],
                     [h("b", null, "Timeouts"), " — raise the timeout in Settings or per request. Check proxy settings in a company network."],
                     [h("b", null, "Works in the browser but not here"), " — the browser may send cookies or headers you don't; copy the request as cURL from the browser's developer tools and import it."],
                     [h("b", null, "Echo server port in use"), " — change the port in Settings → Local echo server; the sample's ", code("baseUrl"), " in the “Local echo server” environment follows automatically."],

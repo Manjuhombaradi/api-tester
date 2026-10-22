@@ -2,7 +2,7 @@
   "name": "api-tester",
   "productName": "API Tester",
   "desktopName": "api-tester.desktop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Standalone desktop API testing tool: requests, environments, assertions, suite runner and shareable suite files",
   "main": "src/main/main.js",
   "bin": {
@@ -39,6 +39,14 @@
       "package.json"
     ],
     "afterPack": "./build/afterPack.js",
+    "electronFuses": {
+      "runAsNode": true,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true
+    },
     "toolsets": {
       "appimage": "1.0.3"
     },
@@ -76,6 +84,14 @@
         {
           "from": "build/bin/api-tester",
           "to": "bin/api-tester"
+        },
+        {
+          "from": "node_modules/electron/LICENSE",
+          "to": "LICENSE.electron.txt"
+        },
+        {
+          "from": "node_modules/electron/dist/LICENSES.chromium.html",
+          "to": "LICENSES.chromium.html"
         }
       ],
       "extendInfo": {
@@ -181,7 +197,7 @@
       "category": "Development",
       "synopsis": "API testing tool: requests, assertions, suite runner",
       "description": "Standalone API testing tool: send HTTP requests, use environments and variables, add no-code assertions, chain requests, run suites with data files and share suites as files.",
-      "maintainer": "API Tester <noreply@api-tester.local>",
+      "maintainer": "Manjunagouda Hombaradi <manjuhombaradi@gmail.com>",
       "icon": "build/icons"
     },
     "deb": {
@@ -200,13 +216,14 @@
         "libx11-xcb1"
       ],
       "appArmorProfile": "build/linux/apparmor-profile.tpl"
-    }
+    },
+    "copyright": "Copyright © 2026 Manjunagouda Hombaradi"
   },
   "license": "MIT",
   "private": true,
   "author": {
-    "name": "API Tester",
-    "email": "noreply@api-tester.local"
+    "name": "Manjunagouda Hombaradi",
+    "email": "manjuhombaradi@gmail.com"
   },
   "homepage": "https://github.com/Manjuhombaradi/api-tester",
   "repository": {
@@ -227,7 +244,7 @@
     "tough-cookie": "^6.0.2"
   },
   "devDependencies": {
-    "electron": "^45.0.0",
+    "electron": "45.0.0",
     "electron-builder": "^26.15.3"
   }
 }

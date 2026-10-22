@@ -133,8 +133,8 @@ const FALLBACK_META = {
 };
 
 const DEFAULT_SETTINGS = {
-    timeoutMs: 30000, followRedirects: true, verifyTls: true, proxy: { enabled: false, url: "", noProxy: "localhost,127.0.0.1" },
-    maxResponseMB: 20, historySize: 100, echoServer: { autoStart: true, port: 3999 }, theme: "system"
+    timeoutMs: 30000, followRedirects: true, verifyTls: true, enforceTlsVerification: false, proxy: { enabled: false, url: "", noProxy: "localhost,127.0.0.1" },
+    maxResponseMB: 20, historySize: 100, echoServer: { autoStart: false, port: 3999 }, theme: "system"
 };
 
 /** The sample suite's environment for the built-in echo server (core/sample.js). */
@@ -183,6 +183,30 @@ const App = {
         return FALLBACK_META.dynamicVariables;
     },
     effectiveSettings() { return { ...DEFAULT_SETTINGS, ...(this.state.settings || {}) }; },
+
+    // ------------------------------------------------------------ security helpers
+    /**
+     * TLS certificate checks of a request when it is sent: { off, overridden, from }. off: certificates are not
+     * verified; overridden: the request (or Settings) turns verification off, but Settings → "Enforce TLS
+     * verification" is on, so they are verified anyway. from: "request" | "settings".
+     */
+    tlsState(request) {
+        const s = this.effectiveSettings();
+        const own = request && request.settings && typeof request.settings.verifyTls === "boolean" ? request.settings.verifyTls : null;
+        const wanted = own === null ? s.verifyTls !== false : own;
+        const enforced = s.enforceTlsVerification === true;
+        return { off: !wanted && !enforced, overridden: !wanted && enforced, from: own === null ? "settings" : "request" };
+    },
+    /**
+     * A request or run was not sent because it uploads local files that are not allowed yet (needs: main's
+     * needsFileApproval). Main asks the user in a native dialog; -> true when allowed (then send / run again).
+     */
+    async allowUploads(needs, context = "send") {
+        if (!needs || !Array.isArray(needs.files) || !needs.files.length) return false;
+        const r = await attempt(() => api.call("files.approve", { suiteId: needs.suiteId || null, files: needs.files, context }));
+        this.emit("file-approvals-changed", { suiteId: needs.suiteId || null });
+        return !!(r && r.approved);
+    },
 
     // ------------------------------------------------------------ persistence
     /** Persists a suite (insert or replace), updates state and emits "suites-changed". Saves are serialized. */
@@ -495,7 +519,12 @@ const App = {
     openHistory(entry) {
         if (!entry || !entry.request) return toast("This history entry has no request data", "warn");
         const req = deepClone(entry.request);
-        return this.openTemp(req, { title: req.name || entry.name, suiteId: entry.suiteId });
+        const tab = this.openTemp(req, { title: req.name || entry.name, suiteId: entry.suiteId });
+        // the history keeps no passwords, tokens or API keys (workspace.js): say so where they are missing
+        if (entry.credentialsRemoved) {
+            toast("The history does not keep credentials: passwords, tokens and API keys of this copy are empty or shown as •••••. Enter them again, or open the saved request.", "info", 8000);
+        }
+        return tab;
     },
     openItemSettings(suiteId, folderId = null) {
         const id = `s:${suiteId}:${folderId || "suite"}`;
@@ -576,6 +605,9 @@ const App = {
         const parent = target.folderId ? Model.findItem(suite, target.folderId)?.item : null;
         (parent ? parent.items : suite.items).push(item);
         try { await this.saveSuite(suite); } catch (err) { toast(`Could not save: ${cleanError(err)}`, "error"); return false; }
+        // files chosen for this unsaved request stay allowed for upload in the suite it is saved to
+        const files = requestFilePaths(draft);
+        if (!tab.suiteId && files.length) await api.call("files.carryApprovals", { toSuiteId: suite.id, paths: files }).catch(() => {});
         // turn the tab into a normal one bound to the saved request
         const oldId = tab.id;
         tab.temp = false;
@@ -1207,6 +1239,14 @@ const App = {
             if (typeof Welcome !== "undefined") Welcome.show();
             else this.showHome();
         }
+        // a problem while loading (damaged file, saved secrets the system keychain would not decrypt)
+        if (ws.warning) {
+            setTimeout(() => modal({
+                title: "Your workspace needs attention",
+                body: h("div", { class: "callout warn" }, icon("alert"), h("span", { style: { overflowWrap: "anywhere" } }, ws.warning)),
+                buttons: [{ label: "OK", class: "primary", value: null }]
+            }), 300);
+        }
     },
     restoreTabs() {
         const saved = Array.isArray(this.state.ui.openTabs) ? this.state.ui.openTabs : [];
@@ -1270,6 +1310,14 @@ function tabTooltip(tab) {
     }
     if (tab.kind === "settings") return `${suite ? suite.name : ""}${tab.itemId ? " / " + App.tabTitle(tab) : ""} settings`;
     return "Runner";
+}
+
+/** Local file paths a request uploads as written in it (binary body, multipart file fields). */
+function requestFilePaths(req) {
+    const b = (req && req.body) || {};
+    if (b.mode === "binary") return b.binaryPath ? [b.binaryPath] : [];
+    if (b.mode === "multipart") return (b.multipart || []).filter((p) => p && p.enabled !== false && p.type === "file" && p.filePath).map((p) => p.filePath);
+    return [];
 }
 
 /** "Suite / Folder / Request" */

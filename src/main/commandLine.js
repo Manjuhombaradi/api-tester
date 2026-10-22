@@ -6,6 +6,7 @@
 // and by the desktop app's command line mode (src/main/main.js).
 // Exit codes: 0 everything passed, 1 failures / errors, 2 usage error (bad option, file not found, invalid file).
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const model = require("../core/model");
 const { normalizeSettings } = require("./workspace");
@@ -25,6 +26,7 @@ const REPORTERS = ["cli", "junit", "html", "json"];
 const DEFAULT_OUT_DIR = "api-tester-reports";
 const DEFAULT_ECHO_PORT = 3999;
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
+const VAR_ENV_PREFIX = "API_TESTER_VAR_";
 
 const HELP = `API Tester ${VERSION} - command line
 
@@ -45,21 +47,43 @@ Options for run:
       --bail                 Stop at the first failed request
       --timeout <ms>         Timeout for requests that do not set their own (default 30000, 0 = none)
   -k, --insecure             Do not verify TLS certificates, for every request (self-signed test servers)
-      --var <key=value>      Set a variable (overrides environment, suite and global values); repeatable
+      --strict-tls           Always verify TLS certificates, also for requests whose Settings turn it off
+                             (also API_TESTER_STRICT_TLS=1)
+      --var <key=value>      Set a variable (overrides environment, suite and global values); repeatable.
+                             Visible to other users in the process list: use --var-env for secrets
+      --public-var <key=value>
+                             Like --var, but the value is never masked in the output and the reports (for
+                             values that are not secret, such as a base URL with a path); repeatable
+      --var-env <key=NAME>   Set the variable key to the value of the environment variable NAME; repeatable
       --globals <file>       Global variables: JSON {"key": "value"}, a list of variables, or a Postman globals file
+      --ca-file <pem>        Also trust the CA certificates in this PEM file (company root behind a TLS-inspecting
+                             proxy); repeatable. Also API_TESTER_CA_FILE and NODE_EXTRA_CA_CERTS
+      --allow-file <path>    Allow uploads of this file, or of the files in this folder; repeatable. Without it,
+                             only files in the suite's folder are uploaded (multipart file fields, binary bodies).
+                             Hidden files and folders (.env, .git, .ssh ...) and SSH keys are only uploaded when
+                             --allow-file names them; a suite in the home folder or at the top of a disk needs
+                             --allow-file for every file
   -r, --reporter <list>      Comma separated: cli, junit, html, json (default cli)
   -o, --out <dir>            Folder for junit / html / json reports (default ./${DEFAULT_OUT_DIR})
-      --proxy <url>          HTTP proxy for all requests (default: HTTPS_PROXY / HTTP_PROXY when set)
+      --proxy <url>          HTTP proxy for all requests (default: HTTPS_PROXY / HTTP_PROXY when set; hosts in
+                             NO_PROXY, default localhost,127.0.0.1, are reached directly)
       --no-color             Plain text output (also when NO_COLOR is set or output is not a terminal)
       --echo-server          Start the local echo server during the run (port 3999, or --echo-port <n>)
+
+Variables from the environment: API_TESTER_VAR_<key>=value sets the variable <key> (like --var-env).
+Values from API_TESTER_VAR_*, --var-env and --var are masked (•••••) in the output and the reports.
+--var values that are a plain base address (https://host:port, no path), small numbers or true / false stay
+readable; an address with a path (webhook, signed URL) is masked - use --public-var for one that is not secret.
 
 Options for echo-server:
   -p, --port <n>             TCP port (default ${DEFAULT_ECHO_PORT})
       --host <address>       Address to listen on (default 127.0.0.1; 0.0.0.0 = reachable from other machines)
+      --allow-host <name>    Also answer requests for this host name (default: localhost and the listen
+                             address only, against DNS rebinding); repeatable (also API_TESTER_ECHO_ALLOWED_HOSTS)
 
 Examples:
   api-tester run "My API.apisuite" --env Staging
-  api-tester run suite.apisuite --env CI --var token=$API_TOKEN --reporter cli,junit --out reports
+  api-tester run suite.apisuite --env CI --var-env token=API_TOKEN --reporter cli,junit --out reports
   api-tester run suite.apisuite --data users.csv --folder "Users" --bail
 
 Exit codes: 0 all passed, 1 failures or errors (also: a report could not be written), 2 invalid options or files.
@@ -79,8 +103,13 @@ const OPTIONS = {
     "--bail": ["bail", "flag"],
     "--timeout": ["timeout", "value"],
     "--insecure": ["insecure", "flag"], "-k": ["insecure", "flag"],
+    "--strict-tls": ["strictTls", "flag"],
     "--var": ["vars", "list"],
+    "--public-var": ["publicVars", "list"],
+    "--var-env": ["varEnv", "list"],
     "--globals": ["globals", "value"],
+    "--allow-file": ["allowFiles", "list"],
+    "--ca-file": ["caFiles", "list"],
     "--reporter": ["reporters", "list"], "-r": ["reporters", "list"], "--reporters": ["reporters", "list"],
     "--out": ["out", "value"], "-o": ["out", "value"],
     "--proxy": ["proxy", "value"],
@@ -90,17 +119,19 @@ const OPTIONS = {
     "--echo-port": ["echoPort", "value"],
     "--port": ["port", "value"], "-p": ["port", "value"],
     "--host": ["host", "value"],
+    "--allow-host": ["allowHosts", "list"],
     "--help": ["help", "flag"], "-h": ["help", "flag"],
     "--version": ["version", "flag"], "-v": ["version", "flag"]
 };
 // accepted and ignored: launchers and Electron pass them through
 const IGNORED = ["--cli", "--no-sandbox", "--disable-gpu", "--in-process-gpu"];
-const RUN_ONLY = ["env", "iterations", "data", "folders", "delay", "bail", "timeout", "insecure", "vars", "globals", "reporters", "out", "proxy", "echoServer", "echoPort"];
-const ECHO_ONLY = ["port", "host"];
+const RUN_ONLY = ["env", "iterations", "data", "folders", "delay", "bail", "timeout", "insecure", "strictTls", "vars", "publicVars", "varEnv", "globals", "allowFiles",
+    "reporters", "out", "proxy", "echoServer", "echoPort"];
+const ECHO_ONLY = ["port", "host", "allowHosts"];
 
 /** argv -> { command, positional: [], options: {} }; throws UsageError for unknown or incomplete options. */
 function parseArgs(argv) {
-    const options = { folders: [], vars: [], reporters: [] };
+    const options = { folders: [], vars: [], publicVars: [], varEnv: [], allowFiles: [], allowHosts: [], caFiles: [], reporters: [] };
     const positional = [];
     let onlyPositional = false;
     for (let i = 0; i < argv.length; i++) {
@@ -227,7 +258,7 @@ function readTextFile(file, what) {
  * blank Auth credentials, a file from a newer version, what a Postman / OpenAPI import could not convert.
  * API Tester files keep their ids (so --env / --folder ids work).
  */
-function loadSuite(file) {
+function loadSuite(file, options = {}) {
     const text = readTextFile(file, "Suite file");
     const name = path.basename(file);
     let result;
@@ -241,13 +272,13 @@ function loadSuite(file) {
     if (!suite) {
         throw new UsageError(`${name} contains no suite${result && result.kind === "environment" ? " (it is an environment file; use it with --globals or import it in the app)" : ""}`);
     }
-    const warnings = cliWarnings(result.warnings || []);
+    const warnings = cliWarnings(result.warnings || [], options);
     if (result.suites.length > 1) warnings.push(`${name} contains ${result.suites.length} suites; running the first one, "${suite.name}".`);
     return { suite, warnings };
 }
 
-/** Importer notes, worded for the command line. */
-function cliWarnings(warnings) {
+/** Importer notes, worded for the command line. options: the run options (--strict-tls, --insecure), localFilesNote. */
+function cliWarnings(warnings, options = {}) {
     const out = [];
     for (const warning of warnings) {
         const text = String(warning);
@@ -255,7 +286,22 @@ function cliWarnings(warnings) {
         if (/^Secret values were not included/i.test(text)) continue;
         if (/^Credentials are empty in the Auth tab/i.test(text)) {
             // secret Auth fields are blanked on export; a {{variable}} in that field can be set from the command line
-            out.push(`${text.replace(/[;,]?\s*fill them in\.?$/i, "")} (they were not exported). In the app, put a variable there, for example {{token}}, export again and run with --var token=…`);
+            out.push(`${text.replace(/[;,]?\s*fill them in\.?$/i, "")} (they were not exported). In the app, put a variable there, for example {{token}}, export again and run with --var-env token=API_TOKEN (or API_TESTER_VAR_token)`);
+            continue;
+        }
+        // security notes of the import (suiteFile.securityNotes), with the command line options that apply
+        if (/^Local files:/.test(text)) {
+            out.push(text.replace(/ API Tester asks before it reads each file;.*$/, options.localFilesNote ||
+                " Only files in the suite's folder (not hidden files such as .env or .git, nor SSH keys), or allowed with --allow-file <path>, are read."));
+            continue;
+        }
+        if (/^Scripts:/.test(text)) {
+            out.push(text.replace(/ Scripts cannot read files.*$/, " They can read and change variables (also secret ones) and the request."));
+            continue;
+        }
+        if (/^TLS certificate checks are off/.test(text)) {
+            if (options.insecure) continue; // --insecure turns them off for every request anyway
+            out.push(text.replace(/ Turn "Verify TLS" back on.*$/, options.strictTls ? " --strict-tls verifies them anyway." : " Add --strict-tls to verify them anyway."));
             continue;
         }
         out.push(text);
@@ -285,10 +331,138 @@ function loadGlobals(file) {
     }));
 }
 
-function parseVarOption(text) {
+function parseVarOption(text, option = "--var") {
     const eq = text.indexOf("=");
-    if (eq < 1) throw new UsageError(`--var needs key=value (got "${text}")`);
+    if (eq < 1) throw new UsageError(`${option} needs key=value (got "${text}")`);
     return [text.slice(0, eq).trim(), text.slice(eq + 1)];
+}
+
+/**
+ * --var values that are a plain base address (scheme, host and port only: https://api.example.com:8443/), small
+ * numbers or true / false are not masked (a base URL must stay readable). An address with a path, query or user
+ * name is masked: webhooks and signed URLs carry their secret there (https://hooks.example.com/services/T0/B0/xyz).
+ */
+function looksPublic(value) {
+    const v = String(value).trim();
+    return /^https?:\/\/[^\s@?#/\\]+\/?$/i.test(v) || /^(true|false|null)$/i.test(v) || /^-?\d{1,4}$/.test(v);
+}
+
+/**
+ * Variables given on the command line, lowest precedence first: API_TESTER_VAR_<key> environment variables, then
+ * --var-env key=NAME, then --var key=value, then --public-var key=value. -> [{ key, value, secret, from }]. Values
+ * from the environment are always secret (masked in output and reports); --var values too, unless they look like a
+ * base address or a number; --public-var values never.
+ */
+function commandLineVariables(options, env) {
+    const out = [];
+    for (const [name, value] of Object.entries(env || {})) {
+        if (!name.startsWith(VAR_ENV_PREFIX) || name.length === VAR_ENV_PREFIX.length || value === undefined) continue;
+        out.push({ key: name.slice(VAR_ENV_PREFIX.length), value: String(value), secret: true, from: name });
+    }
+    for (const text of options.varEnv || []) {
+        const eq = text.indexOf("=");
+        if (eq < 1 || eq === text.length - 1) throw new UsageError(`--var-env needs key=ENVIRONMENT_VARIABLE (got "${text}")`);
+        const key = text.slice(0, eq).trim();
+        const name = text.slice(eq + 1).trim();
+        if (env[name] === undefined) throw new UsageError(`--var-env ${key}=${name}: the environment variable ${name} is not set`);
+        out.push({ key, value: String(env[name]), secret: true, from: name });
+    }
+    for (const text of options.vars || []) {
+        const [key, value] = parseVarOption(text);
+        out.push({ key, value, secret: !looksPublic(value), from: "--var" });
+    }
+    for (const text of options.publicVars || []) {
+        const [key, value] = parseVarOption(text, "--public-var");
+        out.push({ key, value, secret: false, from: "--public-var" });
+    }
+    return out;
+}
+
+/** Inside folder (or the file itself)? Both real paths. */
+function isInside(file, folder) {
+    const rel = path.relative(folder, file);
+    return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+function realPathOf(p) {
+    try {
+        return fs.realpathSync(p);
+    } catch (_) {
+        return path.resolve(p);
+    }
+}
+
+// names that often hold credentials: hidden files and folders (.ssh, .aws, .git/config, .env, .npmrc ...), private
+// SSH keys and the Windows profile data folder; uploaded only when --allow-file names them (or a folder inside them)
+const PRIVATE_NAME = /^(?:\..*|id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?|appdata)$/i;
+
+/** The first name below root that holds credentials ("" = none). file is inside root. */
+function privateSegment(file, root) {
+    return path.relative(root, file).split(/[\\/]+/).find((name) => name && name !== "." && PRIVATE_NAME.test(name)) || "";
+}
+
+/**
+ * approveFile for the runner (see core/prepare.js): a shared suite must not upload files of this computer, so only
+ * files in the suite's folder or given with --allow-file are read (checked as written, then as the real file: a
+ * link pointing outside does not count). Not even there: hidden files / folders and SSH keys below such a folder,
+ * unless --allow-file names them. A suite in the home folder or at the top of a disk (an ancestor of the home
+ * folder) has no folder of its own: every file needs --allow-file. Nothing on disk is read for a path before
+ * it is allowed as written (prepare.js asks with realPath null first).
+ * -> approveFile(file, details), plus .why(filePath, realPath) (the reason a file was refused, for the message) and
+ *    .suiteFolderNote (for the "Local files" note).
+ */
+function createFileApprover(suiteDir, allowed, { home = os.homedir() } = {}) {
+    const both = (p) => [...new Set([path.resolve(p), realPathOf(p)])]; // the folder as given and as it really is
+    const suiteForms = both(suiteDir);
+    const homeForms = home ? both(home) : [];
+    // the suite's folder counts only when it is a folder of its own, not the home folder or one above it
+    const suiteTooWide = suiteForms.some((s) => homeForms.some((h) => isInside(h, s)) || path.parse(s).root === s);
+    const roots = suiteTooWide ? [] : [suiteForms];
+    for (const entry of allowed || []) {
+        const full = path.resolve(String(entry));
+        if (!fs.existsSync(full)) throw new UsageError(`--allow-file: ${full} does not exist`);
+        roots.push(both(full));
+    }
+    /** "" when allowed, else why not: "outside" | "private:<name>" */
+    const check = (p) => {
+        let reason = "outside";
+        for (const forms of roots) {
+            for (const root of forms) {
+                if (!isInside(p, root)) continue;
+                const name = privateSegment(p, root);
+                if (!name) return "";
+                reason = `private:${name}`;
+            }
+        }
+        return reason;
+    };
+    const verdict = (file, realPath) => {
+        const paths = [path.resolve(String(file))];
+        if (typeof realPath === "string" && realPath) paths.push(realPath);
+        for (const p of paths) {
+            const reason = check(p);
+            if (reason) return { reason, path: p };
+        }
+        return null;
+    };
+    const approve = (file, details) => !verdict(file, details && details.realPath);
+    approve.why = (filePath, realPath) => {
+        const v = verdict(filePath, realPath);
+        if (!v) return "";
+        if (v.reason.startsWith("private:")) {
+            const name = v.reason.slice("private:".length);
+            const what = name.startsWith(".") ? `"${name}" is hidden (its name starts with "."), and hidden files and folders often hold credentials (.env, .git/config, .ssh)`
+                : /^appdata$/i.test(name) ? `"${name}" holds the data of Windows programs, credentials too`
+                    : `"${name}" is the usual name of an SSH private key`;
+            return `${what}, so it is only uploaded when --allow-file names it`;
+        }
+        if (suiteTooWide) return `the suite file is in ${suiteForms[0]}, which is your home folder or a folder above it, so files next to it are not uploaded unless you allow them`;
+        return "it is not in the suite's folder";
+    };
+    approve.suiteFolderNote = suiteTooWide
+        ? ` The suite file is in your home folder or a folder above it (${suiteForms[0]}), so no file is read unless you allow it with --allow-file <path>.`
+        : " Only files in the suite's folder (not hidden files such as .env or .git, nor SSH keys), or allowed with --allow-file <path>, are read.";
+    return approve;
 }
 
 function findEnvironment(suite, query) {
@@ -408,10 +582,13 @@ function existingFileOnPath(target) {
 }
 
 // Error texts of the HTTP engine point to the app's Settings; on the command line, options do that job.
-function cliHints(text, { ownTimeout }) {
+function cliHints(text, { ownTimeout, insecure = false }) {
     if (typeof text !== "string" || !text) return text;
     return text
         .replace(/To accept it anyway, turn off "Verify TLS" in Settings or in the request's Settings tab\./g, "To accept it anyway, use --insecure (-k).")
+        .replace(/TLS certificate verification was off(?: for this request \("Verify TLS" is turned off in its Settings tab\)| \(Settings > Verify TLS\))/,
+            insecure ? "TLS certificate verification was off (--insecure)" : "TLS certificate verification was off for this request (\"Verify TLS\" is turned off in its Settings tab)")
+        .replace(/Settings > Enforce TLS verification/g, "--strict-tls")
         .replace(/\b(i)ncrease the timeout in Settings or in the request's Settings tab\./gi, (_m, i) => (ownTimeout
             ? `${i}ncrease the timeout in the request's Settings tab in the app (--timeout only changes requests without their own timeout).`
             : `${i}ncrease it with --timeout <ms> (0 = no limit).`))
@@ -420,12 +597,25 @@ function cliHints(text, { ownTimeout }) {
         .replace(/Check Settings > Proxy, or /g, "Check --proxy / HTTPS_PROXY, or ");
 }
 
-/** Rewrites the hints in a request result in place (the terminal output and the reports use it). */
-function applyCliHints(result, suite) {
+/**
+ * Rewrites the hints in a request result in place (the terminal output and the reports use it). approver: the
+ * run's createFileApprover (says why a file was refused).
+ */
+function applyCliHints(result, suite, options = {}, approver = null) {
     if (!result) return;
     const found = result.requestId ? model.findItem(suite, result.requestId) : null;
     const settings = found && found.item && found.item.settings;
-    const ctx = { ownTimeout: !!settings && settings.timeoutMs !== null && settings.timeoutMs !== undefined && settings.timeoutMs !== "" };
+    const ctx = { ownTimeout: !!settings && settings.timeoutMs !== null && settings.timeoutMs !== undefined && settings.timeoutMs !== "", insecure: !!options.insecure };
+    if (result.errorCode === "FILE_NOT_APPROVED" && result.fileApproval) {
+        // the app asks; here the user allows files with an option
+        const { filePath, realPath } = result.fileApproval;
+        const link = realPath && realPath !== filePath ? `, a link to ${realPath}` : "";
+        const why = (approver && approver.why && approver.why(filePath, realPath)) || "it is not in the suite's folder";
+        const text = `This request uploads the local file ${filePath}${link}, which is not allowed: ${why}. ` +
+            `To allow it, add --allow-file "${realPath || filePath}"${why.startsWith("it is not in") ? " (or a folder that contains it)" : ""}.`;
+        for (const l of Array.isArray(result.logs) ? result.logs : []) if (l && l.message === result.error) l.message = text;
+        result.error = text;
+    }
     result.error = cliHints(result.error, ctx);
     if (result.response && result.response.error) result.response.error.message = cliHints(result.response.error.message, ctx);
     for (const a of Array.isArray(result.assertions) ? result.assertions : []) if (a) a.message = cliHints(a.message, ctx);
@@ -435,7 +625,11 @@ function applyCliHints(result, suite) {
 // ------------------------------------------------------------------ run
 
 async function runCommand(positional, options, io, env) {
-    for (const key of ECHO_ONLY) if (options[key] !== undefined) throw new UsageError(`--${key} is an option of echo-server (use --echo-port with run)`);
+    for (const key of ECHO_ONLY) {
+        const v = options[key];
+        if (v === undefined || (Array.isArray(v) && !v.length)) continue;
+        throw new UsageError(key === "allowHosts" ? "--allow-host is an option of echo-server" : `--${key} is an option of echo-server (use --echo-port with run)`);
+    }
     if (!positional.length) throw new UsageError('Missing the suite file: api-tester run <suite.apisuite>');
     if (positional.length > 1) throw new UsageError(`Unexpected argument "${positional[1]}" (put names with spaces in quotes)`);
 
@@ -452,27 +646,49 @@ async function runCommand(positional, options, io, env) {
         }
     }
 
-    const { suite, warnings } = loadSuite(suiteFile);
+    const strictTls = !!options.strictTls || /^(1|true|yes)$/i.test(String(env.API_TESTER_STRICT_TLS || ""));
+    if (strictTls && options.insecure) {
+        throw new UsageError(`--insecure cannot be used together with ${options.strictTls ? "--strict-tls" : "API_TESTER_STRICT_TLS (set in the environment)"}`);
+    }
+    // company root certificates: read here because the installed runtime ignores NODE_EXTRA_CA_CERTS itself
+    const { applyExtraCaFiles, envCaFiles } = require("../core/tlsTrust");
+    const caFiles = [...envCaFiles(env),
+        ...(env.API_TESTER_CA_FILE ? [{ path: env.API_TESTER_CA_FILE, label: "API_TESTER_CA_FILE" }] : []),
+        ...(options.caFiles || []).map((f) => ({ path: path.resolve(f), label: "--ca-file" }))];
+    if (caFiles.length) {
+        try {
+            const ca = applyExtraCaFiles(caFiles);
+            io.err(io.dim(`Trusting ${ca.count} extra CA certificate(s)`));
+        } catch (err) {
+            throw new UsageError(err.message);
+        }
+    }
+    const approveFile = createFileApprover(path.dirname(suiteFile), options.allowFiles);
+
+    const { suite, warnings } = loadSuite(suiteFile, { strictTls, insecure: !!options.insecure, localFilesNote: approveFile.suiteFolderNote });
     for (const w of warnings) io.err(io.yellow(`Note: ${w}`));
 
-    // environment, then --var values on top of it (a temporary environment when the suite has none)
+    // environment, then the command line variables on top of it (a temporary environment when the suite has none)
     let environment = options.env !== undefined ? findEnvironment(suite, options.env) : (suite.environments.find((e) => e.id === suite.activeEnvironmentId) || null);
-    const overrides = options.vars.map(parseVarOption);
-    if (overrides.length) {
+    const commandVars = commandLineVariables(options, env);
+    const overrides = commandVars.map((v) => [v.key, v.value]);
+    if (commandVars.length) {
         if (!environment) {
             environment = model.newEnvironment("Command line", []);
             suite.environments.push(environment);
         }
-        for (const [key, value] of overrides) {
+        for (const { key, value, secret } of commandVars) {
             const existing = environment.variables.find((v) => v.key === key);
             if (existing) {
                 existing.value = value;
                 existing.enabled = true;
+                existing.secret = !!existing.secret || secret;
             } else {
-                environment.variables.push(model.newVariable(key, value));
+                environment.variables.push(model.newVariable(key, value, { secret }));
             }
         }
     }
+    const maskedNames = [...new Set(environment ? environment.variables.filter((v) => v.secret && commandVars.some((c) => c.key === v.key)).map((v) => v.key) : [])];
     const globals = options.globals ? loadGlobals(path.resolve(options.globals)) : [];
 
     const itemIds = options.folders.length ? findItems(suite, options.folders) : [];
@@ -506,6 +722,7 @@ async function runCommand(positional, options, io, env) {
     const settings = normalizeSettings({
         timeoutMs: timeoutMs === undefined ? undefined : timeoutMs,
         verifyTls: !options.insecure,
+        enforceTlsVerification: strictTls,
         proxy: { enabled: !!proxy.url, url: proxy.url, noProxy: env.NO_PROXY || env.no_proxy || "localhost,127.0.0.1" }
     });
 
@@ -526,7 +743,7 @@ async function runCommand(positional, options, io, env) {
             // another port: a variable that points to the default one (the sample's baseUrl) needs --var
             const pointsToDefault = port === DEFAULT_ECHO_PORT ? null : [...(environment ? environment.variables : []), ...suite.variables]
                 .find((v) => v && v.key && v.enabled !== false && !overrides.some(([k]) => k === v.key) && new RegExp(`//(127\\.0\\.0\\.1|localhost):${DEFAULT_ECHO_PORT}\\b`).test(String(v.value || "")));
-            io.out(io.dim(`Test API running at ${echo.url}${pointsToDefault ? ` ({{${pointsToDefault.key}}} points to port ${DEFAULT_ECHO_PORT}: add --var ${pointsToDefault.key}=${echo.url})` : ""}`));
+            io.out(io.dim(`Echo server running at ${echo.url}${pointsToDefault ? ` ({{${pointsToDefault.key}}} points to port ${DEFAULT_ECHO_PORT}: add --var ${pointsToDefault.key}=${echo.url})` : ""}`));
         } catch (err) {
             if (/in use/i.test(err.message)) io.err(io.yellow(`Port ${port} is in use; assuming the echo server already runs there.`));
             else throw new Error(`The echo server could not start: ${err.message}`);
@@ -552,8 +769,21 @@ async function runCommand(positional, options, io, env) {
     io.out(io.bold(`API Tester ${VERSION} · ${suite.name}`));
     io.out(io.dim(`Environment: ${environment ? environment.name : "none"} · ${planned.length} request${planned.length === 1 ? "" : "s"}${totalIterations > 1 ? ` × ${totalIterations} iterations` : ""}${data ? ` (data: ${path.basename(options.data)}, ${data.length} rows)` : ""}`));
     if (missingSecrets.length) {
-        io.err(io.yellow(`Secret variables without a value: ${missingSecrets.join(", ")}. Set them with ${missingSecrets.map((n) => `--var ${n}=…`).join(" ")}`));
+        io.err(io.yellow(`Secret variables without a value: ${missingSecrets.join(", ")}. Set them from environment variables: ` +
+            `${missingSecrets.map((n) => `${VAR_ENV_PREFIX}${n}=…`).join(" ")} (or --var-env ${missingSecrets[0]}=NAME)`));
     }
+    if (maskedNames.length) io.out(io.dim(`Masked in the output and reports: ${maskedNames.map((n) => `{{${n}}}`).join(", ")}`));
+    if (proxy.url) {
+        // requests can be routed through a proxy by the environment alone: say so (without the proxy's credentials)
+        let label = proxy.url;
+        try {
+            const u = new URL(/^[a-z][a-z\d+.-]*:\/\//i.test(proxy.url) ? proxy.url : `http://${proxy.url}`);
+            label = `${u.protocol}//${u.host}`;
+        } catch (_) { /* checked by checkProxy */ }
+        io.out(io.dim(`Proxy: ${label} (from ${proxy.from}; not for NO_PROXY hosts)`));
+    }
+    if (options.insecure) io.err(io.yellow("TLS certificates are not verified for any request (--insecure)."));
+    else if (strictTls) io.out(io.dim("TLS certificates are verified for every request (--strict-tls)."));
     io.out("");
 
     // live progress: one line per request as it finishes (same format as the reports), then a summary
@@ -573,6 +803,7 @@ async function runCommand(positional, options, io, env) {
             settings,
             signal: controller.signal,
             baseDir: path.dirname(suiteFile), // relative file paths (multipart, binary bodies) next to the suite
+            approveFile, // only files in the suite's folder or allowed with --allow-file are uploaded
             onEvent: (event) => {
                 if (!event || event.type !== "request-done") return;
                 if (event.iteration !== lastIteration) {
@@ -580,7 +811,7 @@ async function runCommand(positional, options, io, env) {
                     iterationNumber++;
                     if (totalIterations > 1) io.out(io.cyan(`${iterationNumber > 1 ? "\n" : ""}Iteration ${iterationNumber} of ${totalIterations}`));
                 }
-                applyCliHints(event.result, suite);
+                applyCliHints(event.result, suite, options, approveFile);
                 printResult(event.result, io, reportersModule);
             }
         });
@@ -697,21 +928,30 @@ function writeReports(run, reporters, dir, suite, reportersModule, io) {
 async function echoCommand(positional, options, io, env) {
     for (const key of RUN_ONLY) {
         const v = options[key];
-        if (v !== undefined && !(Array.isArray(v) && !v.length)) throw new UsageError("echo-server only takes --port and --host");
+        if (v !== undefined && !(Array.isArray(v) && !v.length)) throw new UsageError("echo-server only takes --port, --host and --allow-host");
     }
     if (positional.length) throw new UsageError(`Unexpected argument "${positional[0]}"`);
     const port = intOption(options.port, "--port", { min: 0, max: 65535 });
     const host = options.host || env.API_TESTER_ECHO_HOST || "127.0.0.1";
-    const { startEchoServer, ENDPOINTS } = require("../core/echoServer");
+    const allowedHosts = [...String(env.API_TESTER_ECHO_ALLOWED_HOSTS || "").split(","), ...(options.allowHosts || [])].map((h) => h.trim()).filter(Boolean);
+    const { startEchoServer, isLoopbackAddress, ENDPOINTS } = require("../core/echoServer");
     let server;
     try {
-        server = await startEchoServer({ port: port === undefined ? DEFAULT_ECHO_PORT : port, host });
+        server = await startEchoServer({ port: port === undefined ? DEFAULT_ECHO_PORT : port, host, allowedHosts });
     } catch (err) {
         io.err(io.red(`ERROR: ${err.message}`));
         return EXIT_FAILED;
     }
     const where = host === "0.0.0.0" || host === "::" ? `${server.url} (all network interfaces, port ${server.port})` : server.url;
     io.out(io.bold(`API Tester echo server listening on ${where}`));
+    if (!isLoopbackAddress(host)) {
+        const docker = fs.existsSync("/.dockerenv");
+        io.err(io.yellow(`Warning: other computers on the network can use this echo server (it listens on ${host}). It has no authentication ` +
+            `and is meant for tests on this computer. ${docker
+                ? `In Docker this address is needed for -p; publish the port on this computer only: -p 127.0.0.1:${server.port}:${server.port}`
+                : "Use --host 127.0.0.1 unless other computers need it."}`));
+    }
+    if (allowedHosts.length) io.out(io.dim(`Also answers requests for: ${allowedHosts.join(", ")}`));
     io.out("");
     for (const [method, route, description] of ENDPOINTS || []) {
         io.out(`  ${String(method).padEnd(7)}${String(route).padEnd(28)}${io.dim(description)}`);
@@ -805,4 +1045,4 @@ function flushStream(stream, done) {
     }
 }
 
-module.exports = { runCli, main, parseArgs, HELP, VERSION, EXIT_OK, EXIT_FAILED, EXIT_USAGE, loadGlobals, findItems, findEnvironment };
+module.exports = { runCli, main, parseArgs, HELP, VERSION, EXIT_OK, EXIT_FAILED, EXIT_USAGE, loadGlobals, findItems, findEnvironment, createFileApprover, commandLineVariables };

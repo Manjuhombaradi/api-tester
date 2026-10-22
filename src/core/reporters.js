@@ -1,6 +1,9 @@
 "use strict";
 // Reports for a RunResult (runner.runSuite): JSON, JUnit XML (CI systems), a self-contained HTML page and
 // plain text for the terminal (CLI).
+// The runner masks secrets in run results; reports mask credential headers (Authorization, Cookie, Set-Cookie, API
+// keys, ...) and cookie values once more by name, in case a result was not masked (e.g. given by the app as is).
+const { maskHeadersByName, maskCookies } = require("./secrets");
 
 const MAX_HTML_BODY_CHARS = 20000; // response body preview per request in the HTML report
 const MAX_JUNIT_OUT_CHARS = 4000;
@@ -11,8 +14,25 @@ function stats(run) {
     return { requests: 0, passed: 0, failed: 0, errors: 0, assertions: 0, assertionsPassed: 0, assertionsFailed: 0, avgResponseMs: 0, ...((run && run.stats) || {}) };
 }
 
+/** A result with credential headers and cookie values masked by name (see the file comment). */
+function safeResult(r) {
+    if (!r || typeof r !== "object") return r;
+    const out = { ...r };
+    if (r.prepared && typeof r.prepared === "object") out.prepared = { ...r.prepared, headers: maskHeadersByName(r.prepared.headers || []) };
+    if (r.response && typeof r.response === "object") {
+        const res = { ...r.response };
+        if (res.headers) res.headers = maskHeadersByName(res.headers);
+        if (res.headersMap) res.headersMap = maskHeadersByName(res.headersMap);
+        if (res.cookies) res.cookies = maskCookies(res.cookies);
+        if (res.request && typeof res.request === "object") res.request = { ...res.request, headers: maskHeadersByName(res.request.headers || []) };
+        out.response = res;
+    }
+    if (r.historyRequest) delete out.historyRequest; // the request definition is not part of a report
+    return out;
+}
+
 function results(run) {
-    return run && Array.isArray(run.results) ? run.results : [];
+    return run && Array.isArray(run.results) ? run.results.map(safeResult) : [];
 }
 
 function fmtMs(ms) {

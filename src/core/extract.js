@@ -1,7 +1,8 @@
 "use strict";
 // Captures: take values out of a response and store them as variables, so later requests can use them
 // (login -> capture token -> {{token}} in the next request). Objects and lists are stored as JSON text.
-const { responseJson, jsonPathQuery, headerValue, parseRegex, formatValue } = require("./assertions");
+const { responseJson, jsonPathQuery, headerValue, parseRegex, runRegex, formatValue } = require("./assertions");
+const { createTimeBudget, isTimeLimit } = require("./limits");
 
 const MAX_SHOWN_VALUE = 1000;
 
@@ -43,12 +44,12 @@ function cookieValue(response, name) {
     return undefined;
 }
 
-/** -> { value } (any JSON value) or { error } */
-function readCapture(source, property, response) {
+/** -> { value } (any JSON value) or { error }. ctx.budget: time budget of the response (limits.js). */
+function readCapture(source, property, response, ctx = null) {
     switch (source) {
         case "jsonpath": {
             const json = responseJson(response);
-            const q = jsonPathQuery(json.ok ? json.value : undefined, property);
+            const q = jsonPathQuery(json.ok ? json.value : undefined, property, ctx);
             if (!q.ok) return { error: q.message };
             if (!json.ok) return { error: json.message };
             return q.count === 0 ? { error: `No match for ${q.path}` } : { value: q.value };
@@ -66,7 +67,13 @@ function readCapture(source, property, response) {
             } catch (err) {
                 return { error: err.message };
             }
-            const m = re.exec(String(response.bodyText ?? ""));
+            let m;
+            try {
+                m = runRegex(re, String(response.bodyText ?? ""), ctx, true);
+            } catch (err) {
+                if (isTimeLimit(err)) return { error: err.message };
+                throw err;
+            }
             if (!m) return { error: `No match for ${property}` };
             return { value: m.length > 1 ? (m[1] ?? "") : m[0] };
         }
@@ -88,9 +95,11 @@ function readCapture(source, property, response) {
  * Runs the enabled captures and stores the values with scope.set(variable, value, scopeName).
  * -> [{ id, source, variable, scope, value, ok, message }] (value is the stored text, masked when the variable is secret).
  * A failed capture leaves the variable unchanged.
+ * options.budget: time budget shared with the assertions of the same response (regex and JSONPath are time limited).
  */
-function runExtractions(extractions, response, scope) {
+function runExtractions(extractions, response, scope, options = {}) {
     const out = [];
+    const ctx = { budget: (options && options.budget) || createTimeBudget() };
     for (const x of Array.isArray(extractions) ? extractions : []) {
         if (!x || typeof x !== "object" || x.enabled === false) continue;
         const variable = String(x.variable ?? "").trim();
@@ -114,7 +123,7 @@ function runExtractions(extractions, response, scope) {
         }
         let found;
         try {
-            found = readCapture(x.source, property, response);
+            found = readCapture(x.source, property, response, ctx);
         } catch (err) {
             found = { error: `Could not capture: ${err.message}` };
         }

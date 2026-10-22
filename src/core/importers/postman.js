@@ -333,7 +333,9 @@ function convertTestScript(code) {
         aliases.push(m[1].replace(/\$/g, "\\$"));
     }
     const jsonSource = `(?:pm\\.response\\.json\\(\\s*\\)${aliases.length ? `|(?<![\\w$.])(?:${aliases.join("|")})` : ""})`;
-    const chainRe = String.raw`((?:\.(?:to|be|been|is|that|which|and|has|have|with|at|of|same|deep|not|does|own|a|an))*)\.([A-Za-z]+)\b(?:\(([^()]*(?:\([^()]*\))?[^()]*)\))?`;
+    // the argument may hold one level of parentheses; written so that an unclosed "(" fails in linear time
+    // (two [^()]* next to each other would backtrack quadratically on a long script: imported content)
+    const chainRe = String.raw`((?:\.(?:to|be|been|is|that|which|and|has|have|with|at|of|same|deep|not|does|own|a|an))*)\.([A-Za-z]+)\b(?:\(([^()]*(?:\([^()]*\)[^()]*)?)\))?`;
 
     // pm.expect(<subject>).to.<chain>(<arg>)
     const subjects = [
@@ -581,7 +583,7 @@ function importPostmanCollection(obj) {
     if (ctx.containerScripts.length) warnings.push(`Scripts on ${listNames(ctx.containerScripts)} were not imported: only requests have scripts here.`);
     if (ctx.unsupportedAuth.length) warnings.push(`Unsupported auth types were left out (set the auth again): ${listNames(ctx.unsupportedAuth)}.`);
     if (ctx.oauthBrowserFlows.length) warnings.push(`OAuth 2.0 browser flows (authorization code / implicit) cannot run here; changed to Bearer token, paste a token: ${listNames(ctx.oauthBrowserFlows)}.`);
-    if (ctx.fileParts.length) warnings.push(`File uploads point to files on the original computer; check the file paths: ${listNames(ctx.fileParts)}.`);
+    // file uploads: listed with their paths in the security notes of the import (suiteFile.js)
     if (ctx.multiFileParts.length) warnings.push(`Only the first file of multi-file fields was kept: ${listNames(ctx.multiFileParts)}.`);
     if (ctx.unsupportedBodies.length) warnings.push(`Unsupported body types were left empty: ${listNames(ctx.unsupportedBodies)}.`);
     if (ctx.pathVariables.length) warnings.push(`Path variables without a value became {{variables}}; give them values: ${listNames(ctx.pathVariables)}.`);

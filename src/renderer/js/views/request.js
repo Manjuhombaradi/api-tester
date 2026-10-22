@@ -170,6 +170,15 @@ function createRequestView(tab) {
         if (document.activeElement !== nameInput) nameInput.value = draft().name || "";
         if (!crumbs.childElementCount) put(crumbs, crumbPath, nameInput);
         clear(statusBadge);
+        const tls = App.tlsState(draft());
+        if (tls.off) {
+            statusBadge.appendChild(h("button", {
+                class: "tls-badge", type: "button", onclick: () => selectTab("settings"),
+                title: tls.from === "request"
+                    ? "This request does not verify TLS certificates (Settings tab): anyone on the network path could read or change it. Use this only for test servers with self-signed certificates."
+                    : "TLS certificates are not verified for any request (Settings → Verify TLS certificates is off)."
+            }, icon("unlock"), "TLS not verified"));
+        }
         if (tab.dirty) statusBadge.appendChild(h("span", { class: "unsaved-badge", title: "Press Save to keep the changes" }, "Unsaved"));
         saveBtn.classList.toggle("dirty", !!tab.dirty || !!tab.temp);
         updateSendBtn();
@@ -268,7 +277,7 @@ function createRequestView(tab) {
             { id: "assertions", label: "Assertions", count: enabledCount(d.assertions) || null, countClass: own.length ? (failed ? "bad" : "good") : "" },
             { id: "capture", label: "Capture", count: enabledCount(d.extract) || null },
             { id: "scripts", label: "Scripts", dot: !!(d.scripts.pre.trim() || d.scripts.post.trim()) },
-            { id: "settings", label: "Settings", dot: !!settingsSet },
+            { id: "settings", label: "Settings", dot: !!settingsSet || App.tlsState(d).off, dotClass: App.tlsState(d).off ? "warn" : "", title: App.tlsState(d).off ? "TLS certificates are not verified" : undefined },
             { id: "docs", label: "Docs", dot: !!(d.description || "").trim() }
         ]);
         tabs.setActive(currentTab);
@@ -406,14 +415,16 @@ function createRequestView(tab) {
         } else if (body.mode === "form") {
             put(tabBody, kvTable(body.form, { keyPlaceholder: "Add field", ...varOpts, onChange: () => changed() }), ctNote());
         } else if (body.mode === "multipart") {
-            put(tabBody, multipartTable(body), h("div", { class: "body-note" }, "Sent as multipart/form-data. Choose File to upload a file from this computer."));
+            // the local files and their approval state come first, so they are visible without scrolling
+            put(tabBody, uploadsPanel(), multipartTable(body), h("div", { class: "body-note" }, "Sent as multipart/form-data. Choose File to upload a file from this computer."));
         } else if (body.mode === "binary") {
             const nameEl = h("span", { class: `file-name ${body.binaryPath ? "" : "none"}` }, body.binaryPath || "No file chosen");
-            put(tabBody, 
+            put(tabBody,
+                uploadsPanel(),
                 h("div", { class: "card" }, h("div", { class: "card-body row" },
                     icon("file"), nameEl,
                     h("button", { class: "btn small", type: "button", onclick: async () => {
-                        const p = await attempt(() => api.call("files.pickFile", { title: "Choose the file to send" }));
+                        const p = await attempt(() => api.call("files.pickFile", { title: "Choose the file to send", purpose: "upload", suiteId: tab.suiteId || null }));
                         if (p) { body.binaryPath = p; changed(); renderTabBody(); }
                     } }, "Choose file…"),
                     body.binaryPath ? h("button", { class: "btn small ghost", type: "button", onclick: () => { body.binaryPath = ""; changed(); renderTabBody(); } }, "Remove") : null)),
@@ -461,8 +472,8 @@ function createRequestView(tab) {
                 if (row.type === "file") {
                     const nm = h("span", { class: `file-name ${row.filePath ? "" : "none"}`, title: row.filePath }, row.filePath ? row.filePath.split(/[\\/]/).pop() : "No file chosen");
                     return h("div", { class: "file-pick" }, nm, h("button", { class: "btn small", type: "button", onclick: async () => {
-                        const p = await attempt(() => api.call("files.pickFile", { title: "Choose a file to upload" }));
-                        if (p) { row.filePath = p; done(); table.refresh(); }
+                        const p = await attempt(() => api.call("files.pickFile", { title: "Choose a file to upload", purpose: "upload", suiteId: tab.suiteId || null }));
+                        if (p) { row.filePath = p; done(); table.refresh(); refreshUploads(); }
                     } }, "Choose…"));
                 }
                 const input = h("input", { type: "text", value: row.value || "", spellcheck: "false", placeholder: "Value" });
@@ -475,9 +486,53 @@ function createRequestView(tab) {
                 return input;
             } }
         ];
-        table = kvTable(body.multipart, { columns, newRow, keyPlaceholder: "Add field", onChange: () => changed() });
+        table = kvTable(body.multipart, { columns, newRow, keyPlaceholder: "Add field", onChange: () => { changed(); refreshUploadsSoon(); } });
         return table;
     }
+
+    // Local files this request uploads, with their approval state (main decides; see ipc.js files.approvalState)
+    let uploadsBox = null;
+    let uploadsSeq = 0;
+    function requestArgs() {
+        return { suiteId: tab.suiteId || null, requestId: tab.temp ? null : tab.itemId, request: deepClone(draft()), environmentId: App.activeEnvironmentId(tab.suiteId) };
+    }
+    function uploadsPanel() {
+        uploadsBox = h("div", { class: "uploads-panel hidden" });
+        refreshUploads();
+        return uploadsBox;
+    }
+    async function refreshUploads() {
+        const box = uploadsBox;
+        if (!box || !box.isConnected && currentTab !== "body") return;
+        const seq = ++uploadsSeq;
+        let list = [];
+        try { list = await api.call("files.approvalState", requestArgs()); } catch (_) { list = []; }
+        if (seq !== uploadsSeq || destroyed || box !== uploadsBox) return;
+        clear(box);
+        box.classList.toggle("hidden", !list.length);
+        if (!list.length) return;
+        const where = tab.suiteId && suite() ? "this suite" : "unsaved requests";
+        const rows = list.map((f) => {
+            let badge;
+            if (f.variable) badge = h("span", { class: "badge", title: "The path contains a {{variable}}: the file is checked when the request is sent" }, "Checked when sent");
+            else if (f.remembered) badge = h("span", { class: "badge good", title: `Allowed for ${where} on this computer (not part of exported suites)` }, icon("check"), "Allowed");
+            else if (f.approved) badge = h("span", { class: "badge good", title: "Allowed once, for the next send" }, icon("check"), "Allowed once");
+            else badge = h("span", { class: "badge warn", title: "You are asked before this file is sent" }, icon("alert"), "Needs your OK");
+            const forget = f.remembered ? h("button", { class: "link-btn", type: "button", title: "Ask again before this file is sent", onclick: async () => {
+                await attempt(() => api.call("files.revokeApproval", { suiteId: tab.suiteId || null, path: f.path }));
+                refreshUploads();
+            } }, "Forget") : null;
+            return h("div", { class: "upload-row" }, icon("file"),
+                h("span", { class: "upload-path mono", title: f.path }, f.path),
+                f.kind === "multipart" && f.field ? h("span", { class: "muted small" }, `field “${f.field}”`) : null,
+                badge, forget);
+        });
+        put(box,
+            h("div", { class: "upload-head" }, icon("upload"), h("b", null, "Files from this computer sent with this request")),
+            ...rows,
+            h("div", { class: "hint" }, "Files you choose here are allowed for ", where, ". A file named by an imported or shared suite is only sent after you allow it."));
+    }
+    const refreshUploadsSoon = debounce(() => refreshUploads(), 400);
 
     // Auth
     function effectiveAuth() {
@@ -858,7 +913,7 @@ function createRequestView(tab) {
         const tri = (key, onLabel, offLabel, appValue) => {
             const sel = select([{ value: "", label: `Use app setting (${appValue ? onLabel : offLabel})` }, { value: "true", label: onLabel }, { value: "false", label: offLabel }],
                 s[key] === null || s[key] === undefined ? "" : String(s[key]));
-            sel.addEventListener("change", () => { s[key] = sel.value === "" ? null : sel.value === "true"; changed(); });
+            sel.addEventListener("change", () => { s[key] = sel.value === "" ? null : sel.value === "true"; changed(); if (key === "verifyTls") renderTabBody(); });
             return sel;
         };
         tabBody.appendChild(h("div", { class: "stack", style: { maxWidth: "640px" } },
@@ -866,7 +921,20 @@ function createRequestView(tab) {
                 field("Timeout (ms)", timeout, "Empty uses the app setting. 0 means no timeout."),
                 field("Redirects", tri("followRedirects", "Follow redirects", "Do not follow", app.followRedirects), "Up to 10 redirects are followed."),
                 field("TLS certificates", tri("verifyTls", "Verify certificates", "Do not verify (self-signed OK)", app.verifyTls), "Turn verification off for test servers with self-signed certificates.")),
+            tlsNote(),
             h("div", { class: "hint" }, "Proxy, the default timeout and response size limit are in Settings.")));
+    }
+    function tlsNote() {
+        const tls = App.tlsState(draft());
+        if (tls.overridden) {
+            return h("div", { class: "callout" }, icon("lock"), h("span", null, "Settings → ", h("b", null, "Enforce TLS verification"),
+                " is on: certificates are verified for every request, so “Do not verify” is ignored."));
+        }
+        if (tls.off) {
+            return h("div", { class: "callout warn" }, icon("unlock"), h("span", null, "Certificates are not checked: anyone on the network path could read or change this request and its answer. ",
+                "Use this only for test servers with self-signed certificates."));
+        }
+        return null;
     }
 
     // Docs
@@ -891,12 +959,20 @@ function createRequestView(tab) {
         updateSendBtn();
         response.render();
         try {
-            const result = await api.call("request.send", {
+            const args = {
                 suiteId: tab.suiteId || null,
                 requestId: tab.temp ? null : tab.itemId,
                 request: deepClone(d),
                 environmentId: App.activeEnvironmentId(tab.suiteId)
-            });
+            };
+            let result = await api.call("request.send", args);
+            // not sent: it uploads a local file that is not allowed yet -> ask, then send again (asked once per press)
+            if (result && result.needsFileApproval && seq === tab.sendSeq && !destroyed) {
+                if (await App.allowUploads(result.needsFileApproval, "send") && seq === tab.sendSeq && !destroyed) {
+                    result = await api.call("request.send", args);
+                }
+                if (currentTab === "body") refreshUploads();
+            }
             if (seq !== tab.sendSeq || destroyed) return;
             tab.result = result;
         } catch (err) {
@@ -1019,7 +1095,8 @@ function createRequestView(tab) {
     }));
     unsubs.push(App.on("environment-changed", (p) => { if (p.suiteId === tab.suiteId) renderPreview(); }));
     unsubs.push(App.on("layout-changed", applyLayout));
-    unsubs.push(App.on("settings-changed", () => { if (currentTab === "settings") renderTabBody(); }));
+    unsubs.push(App.on("settings-changed", () => { refreshHeader(); updateTabs(); if (currentTab === "settings") renderTabBody(); }));
+    unsubs.push(App.on("file-approvals-changed", (p) => { if ((p.suiteId || null) === (tab.suiteId || null) && currentTab === "body") refreshUploads(); }));
 
     applyLayout();
     reload();

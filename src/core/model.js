@@ -250,6 +250,23 @@ function collectRequests(suite, itemIds) {
     return out;
 }
 
+/**
+ * Local files a request uploads when it is sent (the active body mode only): binary body and enabled multipart
+ * file parts. -> [{ kind: "binary" | "multipart", field, path }] with the paths as written ({{variables}}, ~ kept).
+ */
+function fileReferences(request) {
+    const body = request && request.body;
+    if (!body || typeof body !== "object") return [];
+    if (body.mode === "binary") {
+        const p = String(body.binaryPath ?? "").trim();
+        return p ? [{ kind: "binary", field: "", path: p }] : [];
+    }
+    if (body.mode !== "multipart") return [];
+    return (Array.isArray(body.multipart) ? body.multipart : [])
+        .filter((part) => part && part.enabled !== false && part.type === "file" && String(part.filePath ?? "").trim())
+        .map((part) => ({ kind: "multipart", field: String(part.key ?? ""), path: String(part.filePath).trim() }));
+}
+
 /** Deep copy with fresh ids (duplicate / paste). */
 function cloneWithNewIds(item) {
     const copy = JSON.parse(JSON.stringify(item));
@@ -267,5 +284,5 @@ module.exports = {
     SUITE_FORMAT, SUITE_VERSION, HTTP_METHODS, BODY_MODES, AUTH_TYPES,
     newId, newVariable, newKeyValue, defaultAuth, defaultBody, newAssertion, newExtraction,
     newRequest, newFolder, newEnvironment, newSuite,
-    normalizeSuite, walkItems, findItem, collectRequests, cloneWithNewIds
+    normalizeSuite, walkItems, findItem, collectRequests, cloneWithNewIds, fileReferences
 };

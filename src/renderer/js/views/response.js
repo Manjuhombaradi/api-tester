@@ -307,6 +307,7 @@ function createResponseView(tab, hooks) {
     }
 
     function renderError(body, r) {
+        if (r.errorCode === "FILE_NOT_APPROVED" || r.needsFileApproval) return renderNotApproved(body, r);
         const resp = r.response || {};
         const code = resp.error?.code || "";
         const message = resp.error?.message || r.error || "The request could not be sent.";
@@ -326,6 +327,21 @@ function createResponseView(tab, hooks) {
                     ? h("button", { class: "btn", type: "button", onclick: () => App.startEchoServer().then((s) => toast(s.running ? `Echo server started at ${s.url || `http://127.0.0.1:${s.port}`}` : s.error, s.running ? "success" : "error")) }, icon("play"), "Start the echo server") : null,
                 /CERT|SELF_SIGNED|UNABLE_TO_VERIFY|TLS|SSL/i.test(code + message)
                     ? h("button", { class: "btn", type: "button", onclick: () => { if (tab.view) tab.view.selectTab("settings"); } }, icon("lock"), "TLS settings of this request") : null)));
+    }
+
+    /** Not sent: the request uploads a local file the user has not allowed (yet). */
+    function renderNotApproved(body, r) {
+        const files = (r.needsFileApproval && r.needsFileApproval.files) || (r.fileApproval && r.fileApproval.filePath ? [{ path: r.fileApproval.filePath }] : []);
+        body.classList.add("pad");
+        body.appendChild(h("div", { class: "resp-error" },
+            h("div", { class: "err-title" }, icon("lock"), "Not sent: a local file needs your OK"),
+            h("div", { class: "err-msg" }, r.error || "This request uploads a file from this computer that is not allowed yet."),
+            files.length > 1 ? h("ul", null, files.map((f) => h("li", null, h("code", null, f.path), f.origin ? ` → ${f.origin}` : ""))) : null,
+            h("div", { class: "hint" }, "Nothing was sent. Requests from imported or shared suites can name any file on your computer, so API Tester asks before it uploads one. ",
+                "Files you choose yourself in the Body tab are allowed automatically."),
+            h("div", { class: "btn-group", style: { marginTop: "10px" } },
+                h("button", { class: "btn primary", type: "button", onclick: () => hooks.onSend && hooks.onSend() }, icon("send"), "Review and send…"),
+                h("button", { class: "btn", type: "button", onclick: () => { if (tab.view) tab.view.selectTab("body"); } }, icon("file"), "Show the Body tab"))));
     }
 
     // ------------------------------------------------------------ headers / cookies
@@ -577,7 +593,12 @@ function errorTips(code, message, host) {
     } else if (code === "TIMEOUT" || code === "ETIMEDOUT") {
         tips.push("The server did not answer in time. Increase the timeout in this request's Settings tab or in Settings.");
     } else if (/CERT|SELF_SIGNED|UNABLE_TO_VERIFY|ALTNAME/i.test(code + message)) {
-        tips.push("The server's certificate is not trusted. For test servers, turn off certificate verification in this request's Settings tab (or for all requests in Settings).");
+        if (App.effectiveSettings().enforceTlsVerification) {
+            tips.push("The server's certificate is not trusted, and Settings → Enforce TLS verification is on, so it cannot be skipped. If your company signs its own certificates (internal servers, TLS-inspecting proxy), add its root certificate in Settings → Trusted CA certificates (API Tester does not use the system's certificate store). Otherwise ask for a certificate signed by a public authority.");
+        } else {
+            tips.push("The server's certificate is not trusted. If your company signs its own certificates, add its root certificate in Settings → Trusted CA certificates (API Tester does not use the system's certificate store).");
+            tips.push("For test servers only: turn off certificate verification in this request's Settings tab (or for all requests in Settings).");
+        }
     } else if (/INVALID_URL/i.test(code) || /Invalid URL/i.test(message)) {
         tips.push("The URL could not be read. Look for unknown {{variables}} and spaces.");
     } else if (/proxy/i.test(code + message)) {

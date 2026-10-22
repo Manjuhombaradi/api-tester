@@ -8,6 +8,7 @@ const https = require("https");
 const zlib = require("zlib");
 const { performance } = require("perf_hooks");
 const { Cookie, defaultPath } = require("tough-cookie");
+const { isCredentialHeader, MIN_SECRET_CHARS, MASK } = require("./secrets");
 
 const APP_VERSION = (() => {
     try {
@@ -50,15 +51,21 @@ function fmtDuration(ms) {
     return ms >= 1000 ? `${Math.round(ms / 100) / 10} s` : `${ms} ms`;
 }
 
-/** Effective send options: request-level settings (prepared.settings) win over app settings. */
+/**
+ * Effective send options: request-level settings (prepared.settings) win over app settings. The app setting
+ * enforceTlsVerification wins over both (checked here, where the TLS connection is made, so a script or a
+ * hand-made PreparedRequest cannot turn verification off either).
+ */
 function resolveSendOptions(prepared, settings) {
     const app = { ...DEFAULT_SETTINGS, ...(settings || {}) };
     const ps = (prepared && prepared.settings) || {};
+    const tlsEnforced = app.enforceTlsVerification === true;
     return {
         timeoutMs: firstNumber(ps.timeoutMs, app.timeoutMs, DEFAULT_SETTINGS.timeoutMs),
         followRedirects: typeof ps.followRedirects === "boolean" ? ps.followRedirects : app.followRedirects !== false,
         maxRedirects: firstNumber(ps.maxRedirects, 10),
-        verifyTls: typeof ps.verifyTls === "boolean" ? ps.verifyTls : app.verifyTls !== false,
+        verifyTls: tlsEnforced ? true : typeof ps.verifyTls === "boolean" ? ps.verifyTls : app.verifyTls !== false,
+        tlsEnforced,
         maxBytes: Math.max(1024, Math.floor((Number(app.maxResponseMB) > 0 ? Number(app.maxResponseMB) : DEFAULT_SETTINGS.maxResponseMB) * 1024 * 1024)),
         proxy: app.proxy || DEFAULT_SETTINGS.proxy
     };
@@ -201,7 +208,7 @@ async function proxyAgentFor(target, proxy, verifyTls, signal) {
         throw Object.assign(new Error(`The proxy URL "${proxy.url}" is not valid (Settings > Proxy)`), { code: "PROXY_ERROR" });
     }
     const { HttpsProxyAgent, HttpProxyAgent } = await loadProxyModules();
-    const agent = target.protocol === "https:" ? new HttpsProxyAgent(proxyUrl, { rejectUnauthorized: verifyTls, signal }) : new HttpProxyAgent(proxyUrl, { signal });
+    const agent = target.protocol === "https:" ? new HttpsProxyAgent(proxyUrl, { rejectUnauthorized: verifyTls, ca: require("./tlsTrust").tlsCaOption(), signal }) : new HttpProxyAgent(proxyUrl, { signal });
     return { agent, label: `${parsed.hostname}:${parsed.port || (parsed.protocol === "https:" ? "443" : "80")}` };
 }
 
@@ -229,13 +236,15 @@ function describeProxyError(err, proxyLabel, target) {
     return { code: "PROXY_ERROR", message: `${reason} ${check}` };
 }
 
-/** Network / TLS / parser error -> { code, message } that tells a tester what to check. */
-function describeNetworkError(err, target) {
+/** Network / TLS / parser error -> { code, message } that tells a tester what to check. opts.tlsEnforced: see resolveSendOptions. */
+function describeNetworkError(err, target, opts = null) {
     const code = String((err && err.code) || "ERROR");
     const msg = String((err && err.message) || err || "Unknown error");
     const host = target ? target.host : "the server";
     const hostname = target ? target.hostname : "";
-    const certHint = "To accept it anyway, turn off \"Verify TLS\" in Settings or in the request's Settings tab.";
+    const certHint = opts && opts.tlsEnforced
+        ? "TLS verification is enforced (Settings > Enforce TLS verification), so certificates that cannot be verified are always refused."
+        : "To accept it anyway, turn off \"Verify TLS\" in Settings or in the request's Settings tab.";
     switch (code) {
         case "TIMEOUT":
         case "ABORTED":
@@ -562,6 +571,10 @@ function headerObject(pairs) {
             http.validateHeaderName(name);
             http.validateHeaderValue(name, value);
         } catch (err) {
+            if (String(value).includes(MASK)) {
+                // e.g. a request opened from the history: credentials are hidden there
+                throw Object.assign(new Error(`Header "${name}" contains ${MASK}, a value hidden in the history or a report. Enter the real value.`), { code: "INVALID_HEADER" });
+            }
             throw Object.assign(new Error(`Header "${name}" is not valid: ${err.message}`), { code: "INVALID_HEADER" });
         }
         const key = names.get(lower(name));
@@ -607,7 +620,8 @@ function performHop(ctx, target, method, pairs, body, shouldFollow) {
                 headers: headerObject(pairs),
                 agent: (ctx.proxy && ctx.proxy.agent) || false, // no pooling: every request gets a fresh connection and real timings
                 maxHeaderSize: MAX_HEADER_BYTES,
-                rejectUnauthorized: ctx.opts.verifyTls
+                rejectUnauthorized: ctx.opts.verifyTls,
+                ca: require("./tlsTrust").tlsCaOption()
             });
         } catch (err) {
             settle(reject, err);
@@ -762,14 +776,39 @@ function errorResponse(error, url, state) {
 // ------------------------------------------------------------------ public API
 
 /**
+ * Headers for the next hop of a redirect to another origin (scheme, host or port differ): like browsers and curl,
+ * credentials are not sent to the other server - Authorization, Proxy-Authorization, Cookie, the request's API key
+ * header (prepared.sensitiveHeaders), headers whose name looks like a credential (X-Auth-Token, X-API-Key, ...)
+ * and headers whose value contains a secret (secretValues). -> { pairs, dropped: [header names] }
+ */
+function crossOriginHeaders(pairs, sensitiveHeaders, secretValues) {
+    const extra = new Set((Array.isArray(sensitiveHeaders) ? sensitiveHeaders : []).map(lower));
+    const secrets = (Array.isArray(secretValues) ? secretValues : []).filter((v) => typeof v === "string" && v.length >= MIN_SECRET_CHARS);
+    const dropped = [];
+    const kept = pairs.filter(([k, v]) => {
+        const name = lower(k);
+        if (name === "host") return false;
+        const drop = isCredentialHeader(name, extra) || secrets.some((secret) => String(v).includes(secret));
+        if (drop && !dropped.some((d) => lower(d) === name)) dropped.push(k);
+        return !drop;
+    });
+    return { pairs: kept, dropped };
+}
+
+/**
  * Sends a PreparedRequest (see prepare.js). Never rejects for network errors.
- *  settings:  app settings (proxy, maxResponseMB, defaults for timeout / redirects / TLS)
- *  cookieJar: tough-cookie CookieJar or null (matching cookies are sent, Set-Cookie stored)
- *  signal:    AbortSignal (-> error code "ABORTED")
+ *  settings:     app settings (proxy, maxResponseMB, defaults for timeout / redirects / TLS, enforceTlsVerification)
+ *  cookieJar:    tough-cookie CookieJar or null (matching cookies are sent, Set-Cookie stored)
+ *  signal:       AbortSignal (-> error code "ABORTED")
+ *  secretValues: secret texts (variables, credentials); a header containing one is not sent to another server on a
+ *                redirect (default: prepared.secretValues from prepare.js)
+ * Redirects to another origin never carry credentials (see crossOriginHeaders), and a 307 / 308 redirect to another
+ * origin is not followed when the request has a body (it would be sent again there): the redirect response is
+ * returned with a warning.
  * -> HttpResponse (see spec 2.2) plus: size.transferred (bytes on the wire), timings.redirect (ms before the
  *    final hop), remotePort, warnings[], request { method, url, headers } (what was sent in the final hop).
  */
-async function sendRequest(prepared, { settings = null, cookieJar = null, signal = null } = {}) {
+async function sendRequest(prepared, { settings = null, cookieJar = null, signal = null, secretValues = null } = {}) {
     const p = prepared || {};
     const opts = resolveSendOptions(p, settings);
     // failHop: ends the hop in progress at once (timeout / cancel); connectAbort: closes a pending proxy socket
@@ -778,6 +817,7 @@ async function sendRequest(prepared, { settings = null, cookieJar = null, signal
     let method = String(p.method || "GET").trim().toUpperCase() || "GET";
     let pairs = headerPairs(p.headers);
     let body = toBodyBuffer(p.body);
+    const secrets = Array.isArray(secretValues) ? secretValues : Array.isArray(p.secretValues) ? p.secretValues : [];
 
     let target;
     try {
@@ -830,8 +870,27 @@ async function sendRequest(prepared, { settings = null, cookieJar = null, signal
             else if (METHODS_WITH_BODY.has(method)) hopPairs.push(["Content-Length", "0"]);
             state.sent = { method, url: target.href, headers: hopPairs };
 
-            const hop = await performHop(ctx, target, method, hopPairs, body,
-                (status, location) => opts.followRedirects && REDIRECT_STATUSES.has(status) && !!location);
+            let heldBack = null; // a 307 / 308 to another origin with a body: not followed
+            const hop = await performHop(ctx, target, method, hopPairs, body, (status, location) => {
+                if (!opts.followRedirects || !REDIRECT_STATUSES.has(status) || !location) return false;
+                if ((status === 307 || status === 308) && body && body.length) {
+                    let next = null;
+                    try {
+                        next = new URL(location, target);
+                    } catch {
+                        next = null;
+                    }
+                    if (next && next.origin !== target.origin) {
+                        heldBack = next;
+                        return false;
+                    }
+                }
+                return true;
+            });
+            if (heldBack) {
+                state.warnings.push(`Not following a redirect to another server with the request body (307/308): ${hop.status} to ${heldBack.href}. ` +
+                    "The body would be sent to that server again; send the request there yourself if you trust it.");
+            }
 
             for (const c of parseSetCookies(hop.setCookies, target)) state.cookies.set(`${c.domain}|${c.path}|${c.name}`, c);
             if (cookieJar && hop.setCookies.length) {
@@ -865,14 +924,18 @@ async function sendRequest(prepared, { settings = null, cookieJar = null, signal
                 pairs = without(pairs, "content-type", "content-length", "transfer-encoding");
             }
             if (next.origin !== target.origin) {
-                // like browsers and curl: credentials are not sent to another host
-                pairs = without(pairs, "authorization", "cookie", "host", "proxy-authorization");
+                // like browsers and curl: credentials are not sent to another server
+                const safe = crossOriginHeaders(pairs, p.sensitiveHeaders, secrets);
+                pairs = safe.pairs;
+                if (safe.dropped.length) {
+                    state.warnings.push(`Redirected to another server (${next.host}): ${safe.dropped.join(", ")} ${safe.dropped.length === 1 ? "was" : "were"} not sent there.`);
+                }
             }
             target = next;
         }
     } catch (err) {
         const viaProxy = ctx.proxy && ctx.hop && ctx.hop.socket === null ? describeProxyError(err, ctx.proxy.label, target) : null;
-        const error = ctx.failure || viaProxy || describeNetworkError(err, target);
+        const error = ctx.failure || viaProxy || describeNetworkError(err, target, opts);
         return errorResponse(error, target.href, state);
     } finally {
         if (timer) clearTimeout(timer);
@@ -889,5 +952,6 @@ module.exports = {
     describeProxyError,
     parseTarget,
     bypassesProxy,
-    resolveSendOptions
+    resolveSendOptions,
+    crossOriginHeaders
 };

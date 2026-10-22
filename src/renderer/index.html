@@ -2,7 +2,11 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; frame-src 'self' about: data:; object-src 'none'; base-uri 'none'">
+    <!-- Only the app's own files run here. No network access from the page (requests are sent by the main process),
+         no plugins, forms or base URL; frames only for the sandboxed HTML preview of a response.
+         frame-ancestors is left out: it only works as an HTTP header (a <meta> CSP ignores it with a console error),
+         and nothing can frame this page anyway (it is loaded from a local file in its own window). -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-src 'self' about: data:; object-src 'none'; base-uri 'none'; form-action 'none'">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>API Tester</title>
     <link rel="stylesheet" href="styles.css">

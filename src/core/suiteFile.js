@@ -9,11 +9,12 @@ const model = require("./model");
 const postman = require("./importers/postman");
 const openapi = require("./importers/openapi");
 const { listNames, plural } = require("./importers/common");
+const { SECRET_AUTH_FIELDS } = require("./secrets");
+const { createScope } = require("./variables");
 
 const SUITE_EXTENSION = "apisuite";
 const ENVIRONMENT_FORMAT = "api-tester-environment";
 const MAX_IMPORT_BYTES = 50 * 1024 * 1024;
-const SECRET_AUTH_FIELDS = [["basic", "password"], ["bearer", "token"], ["apikey", "value"], ["oauth2", "clientSecret"], ["oauth2", "password"]];
 
 function appVersion() {
     try { return require("../../package.json").version || ""; } catch { return ""; }
@@ -129,14 +130,81 @@ function finishSuite(suite, warnings, { checkSecrets = false, checkCredentials =
     return s;
 }
 
+/** true when a script holds more than comments and white space (imported Postman scripts are kept as comments). */
+function hasCode(script) {
+    const withoutBlocks = String(script || "").replace(/\/\*[\s\S]*?\*\//g, "");
+    return withoutBlocks.split(/\r?\n/).some((line) => {
+        const t = line.trim();
+        return t !== "" && !t.startsWith("//");
+    });
+}
+
+// Prefixes of the security notes: the app shows them first and highlighted, the CLI rewords them.
+const SECURITY_NOTE_PREFIXES = ["Local files:", "Scripts:", "TLS certificate checks are off"];
+
+/**
+ * Security notes for imported suites (shown first in the import preview): requests that upload local files (with the
+ * paths), requests with scripts, requests that turn off TLS certificate verification. A shared file must not be able
+ * to do any of this without the user knowing. source: importer ("postman", "curl", ...) for wording.
+ */
+function securityNotes(suites, source = "") {
+    const files = [];
+    const scripts = [];
+    const tlsOff = [];
+    const named = suites.length > 1;
+    for (const suite of suites) {
+        const environment = (suite.environments || []).find((e) => e.id === suite.activeEnvironmentId) || null;
+        model.walkItems(suite.items, (item, parents) => {
+            if (item.type !== "request") return;
+            const name = [...(named ? [suite.name] : []), ...parents.map((p) => p.name), item.name].join(" / ");
+            const refs = model.fileReferences(item);
+            if (refs.length) {
+                // where the file would go: the host of the URL with the suite's variables, which can hide it ({{baseUrl}})
+                let target = "";
+                try {
+                    const url = createScope({ suite, parents, environment }).resolve(item.url || "").trim();
+                    const m = /^(?:[a-z][a-z\d+.-]*:)?\/\/([^/?#\s]+)/i.exec(url) || /^([^/?#\s{}]+)/.exec(url);
+                    target = m ? m[1].replace(/^[^@]*@/, "") : "";
+                } catch {
+                    target = "";
+                }
+                for (const ref of refs) files.push(`"${name}" (${ref.path}${target ? ` to ${target}` : ""})`);
+            }
+            if (item.scripts && (hasCode(item.scripts.pre) || hasCode(item.scripts.post))) scripts.push(name);
+            if (item.settings && item.settings.verifyTls === false) tlsOff.push(name);
+        });
+    }
+    const notes = [];
+    if (files.length) {
+        const shown = files.length > 8 ? `${files.slice(0, 8).join(", ")} and ${files.length - 8} more` : files.join(", ");
+        notes.push(`Local files: ${plural(files.length, "file")} of this computer would be uploaded when the requests are sent: ${shown}. ` +
+            "API Tester asks before it reads each file; only allow files you mean to send to that server.");
+    }
+    if (scripts.length) {
+        notes.push(`Scripts: ${plural(scripts.length, "request")} ${scripts.length === 1 ? "runs" : "run"} JavaScript before or after sending: ${listNames(scripts, 8)}. ` +
+            "Scripts cannot read files or open connections, but they can read and change variables (also secret ones) and the request. Read them in the Scripts tab before you run this suite.");
+    }
+    if (tlsOff.length) {
+        const how = source === "postman" ? " (strictSSL: false in Postman)" : source === "curl" ? " (-k / --insecure in the cURL command)" : "";
+        notes.push(`TLS certificate checks are off for ${plural(tlsOff.length, "request")}${how}: ${listNames(tlsOff, 8)}. ` +
+            "A server with a fake certificate would not be noticed. Turn \"Verify TLS\" back on in the request's Settings tab, or turn on Settings > Enforce TLS verification.");
+    }
+    return notes;
+}
+
 function suiteStats(suites) {
     let requests = 0, folders = 0;
     for (const s of suites) model.walkItems(s.items, (item) => { if (item.type === "folder") folders++; else requests++; });
     return `${plural(requests, "request")}${folders ? ` in ${plural(folders, "folder")}` : ""}`;
 }
 
-/** ImportResult; summary is a one-line description for the import preview, e.g. "Postman collection: 12 requests in 3 folders". */
-function result(kind, source, { suites = [], environments = [], warnings = [], what }) {
+/**
+ * ImportResult; summary is a one-line description for the import preview, e.g. "Postman collection: 12 requests in 3 folders".
+ * warnings start with the security notes (also in securityWarnings, for highlighting).
+ */
+function result(kind, source, { suites = [], environments = [], warnings: notes = [], what }) {
+    const securityWarnings = suites.length ? securityNotes(suites, source) : [];
+    const warnings = [...securityWarnings, ...notes];
     const parts = [];
     if (kind === "environment") {
         parts.push(environments.map((e) => `"${e.name}" (${plural(e.variables.length, "variable")})`).join(", "));
@@ -146,7 +214,7 @@ function result(kind, source, { suites = [], environments = [], warnings = [], w
         const envCount = suites.reduce((n, s) => n + s.environments.length, 0);
         if (envCount) parts.push(plural(envCount, "environment"));
     }
-    return { kind, suites, environments, warnings, source, summary: `${what}: ${parts.join(", ")}` };
+    return { kind, suites, environments, warnings, securityWarnings, source, summary: `${what}: ${parts.join(", ")}` };
 }
 
 function isApiTesterSuite(obj) {
@@ -391,6 +459,6 @@ function importFile(filePath) {
 }
 
 module.exports = {
-    SUITE_EXTENSION, ENVIRONMENT_FORMAT,
-    exportSuite, exportEnvironment, importText, importFile, suiteFileName, splitCurlCommands
+    SUITE_EXTENSION, ENVIRONMENT_FORMAT, SECURITY_NOTE_PREFIXES,
+    exportSuite, exportEnvironment, importText, importFile, suiteFileName, splitCurlCommands, securityNotes
 };

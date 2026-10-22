@@ -277,6 +277,9 @@
 .ie-warnings ul { margin: 0; padding-left: 18px; max-height: 140px; overflow: auto; }
 .ie-warnings li { margin: 1px 0; }
 .ie-export .check { font-weight: 500; }
+.ie-security-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ie-security ul { margin: 0; padding-left: 18px; max-height: 200px; overflow: auto; }
+.ie-security li { margin: 2px 0; overflow-wrap: anywhere; }
 
 /* ------------------------------------------------------------ settings (sg-) */
 .sg-dialog { display: flex; flex-direction: column; }

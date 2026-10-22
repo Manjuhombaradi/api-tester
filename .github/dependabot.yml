@@ -1,0 +1,26 @@
+# Weekly update pull requests (see SECURITY.md, "Third-party components"):
+#  - npm: the app's dependencies and the build tools (Electron updates bring Chromium and Node.js fixes)
+#  - github-actions: the actions in .github/workflows, which are pinned to commit SHAs
+#  - docker: the base image of the Dockerfile, which is pinned by digest
+# Security updates (Dependabot alerts) are proposed as soon as an advisory is published, independent of this schedule.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    # wait a few days after a release before proposing it (a hijacked package is usually caught by then)
+    cooldown:
+      default-days: 5
+    open-pull-requests-limit: 10
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly

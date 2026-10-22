@@ -560,6 +560,16 @@ table.data td { font-family: var(--mono); font-size: 12px; word-break: break-all
 .req-top-actions { margin-left: auto; display: flex; align-items: center; gap: 4px; }
 .unsaved-badge { font-size: 11px; color: var(--accent); background: var(--accent-soft); border-radius: 10px; padding: 1px 8px; font-weight: 600; }
 .temp-badge { font-size: 11px; color: var(--warn); background: var(--warn-soft); border-radius: 10px; padding: 1px 8px; font-weight: 600; }
+/* request does not verify TLS certificates (click: its Settings tab) */
+.tls-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--warn); background: var(--warn-soft); border: 0; border-radius: 10px; padding: 1px 8px; font-weight: 600; cursor: pointer; font-family: inherit; }
+.tls-badge .svg-icon { font-size: 12px; }
+.tls-badge:hover { filter: brightness(.97); text-decoration: underline; }
+/* local files a request uploads, with their approval state (Body tab) */
+.uploads-panel { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; padding: 9px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel-2); font-size: 12.5px; }
+.uploads-panel .upload-head { display: flex; align-items: center; gap: 6px; }
+.uploads-panel .upload-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.uploads-panel .upload-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.tree-tls { color: var(--warn); font-size: 11px; display: inline-flex; }
 .url-bar { display: flex; gap: 0; align-items: stretch; height: 36px; }
 .url-group { display: flex; flex: 1; min-width: 0; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--input-bg); transition: border-color .12s, box-shadow .12s; }
 .url-group:focus-within { border-color: var(--accent); box-shadow: var(--focus-ring); }

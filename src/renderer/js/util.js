@@ -9,6 +9,7 @@
 
 // ------------------------------------------------------------------ DOM
 
+/** Creates an element. Text is always added as text (no HTML parsing anywhere in the app). */
 function h(tag, attrs, ...children) {
     const el = document.createElement(tag);
     if (attrs) {
@@ -24,7 +25,6 @@ function h(tag, attrs, ...children) {
             else if (k.startsWith("on") && typeof v === "function") el.addEventListener(k.slice(2).toLowerCase(), v);
             else if (k === "value") el.value = v;
             else if (k === "checked") el.checked = !!v;
-            else if (k === "html") el.innerHTML = v;
             else if (k === "text") el.textContent = v;
             else if (k === "dataset") Object.assign(el.dataset, v);
             else el.setAttribute(k, v === true ? "" : v);

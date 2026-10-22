@@ -32,7 +32,8 @@
         result: null, // RunResult after run-done
         startedAt: 0,
         finishedAt: 0,
-        buffered: [] // events that arrived before runner.start returned the run id
+        buffered: [], // events that arrived before runner.start returned the run id
+        startError: null // why the last run did not start (shown in the progress title)
     };
     const views = new Set(); // mounted views, notified on every event
     let listening = false;
@@ -93,8 +94,9 @@
             iterations: config.plannedIterations || 1, total: config.expectedTotal || 0, results: [], current: null, result: null, startedAt: Date.now(), finishedAt: 0, buffered: []
         });
         for (const v of views) v.onEvent({ type: "starting" });
+        session.startError = null;
         try {
-            const r = await call("runner.start", {
+            const args = {
                 suiteId: config.suiteId,
                 itemIds: config.itemIds,
                 environmentId: config.environmentId,
@@ -103,7 +105,16 @@
                 dataFileName: config.data ? config.data.fileName : null,
                 delayMs: config.delayMs,
                 stopOnFailure: config.stopOnFailure
-            });
+            };
+            let r = await call("runner.start", args);
+            // the run uploads local files that are not allowed yet: main asks (native dialog), then the run starts
+            if (r && r.needsFileApproval) {
+                if (await App.allowUploads(r.needsFileApproval, "run")) r = await call("runner.start", args);
+                if (r && r.needsFileApproval) {
+                    const n = r.needsFileApproval.files.length;
+                    throw Object.assign(new Error(`it uploads ${n === 1 ? "a local file" : `${n} local files`} that ${n === 1 ? "is" : "are"} not allowed`), { notAllowed: true });
+                }
+            }
             session.runId = r && r.runId;
             session.starting = false;
             const buffered = session.buffered;
@@ -114,7 +125,8 @@
             session.running = false;
             session.finishedAt = Date.now();
             session.buffered = [];
-            toast(`The run could not start: ${err?.message || err}`, "error");
+            session.startError = err?.notAllowed ? `Nothing was sent: ${err.message}.` : null;
+            toast(`The run could not start: ${err?.message || err}`, err?.notAllowed ? "warn" : "error");
             for (const v of views) v.onEvent({ type: "start-failed" });
         }
     }
@@ -412,7 +424,7 @@
             clear(dataBox);
             const choose = h("button", { class: "btn small", type: "button" }, safeIcon("file"), opts.data && !opts.data.error ? "Change…" : "Choose file…");
             choose.addEventListener("click", () => useDataFile(async () => {
-                const path = await call("files.pickFile", { title: "Choose a data file", filters: [{ name: "Data files (CSV, JSON)", extensions: ["csv", "json", "txt", "tsv"] }] });
+                const path = await call("files.pickFile", { title: "Choose a data file", purpose: "data", filters: [{ name: "Data files (CSV, JSON)", extensions: ["csv", "json", "txt", "tsv"] }] });
                 if (!path) return null;
                 const r = await call("files.readDataFile", path);
                 return { ...r, path };
@@ -638,7 +650,7 @@
             let title;
             if (!session.startedAt) title = h("span", { class: "muted" }, "Pick requests on the left and press Run.");
             else if (busy) title = h("span", { class: "rn-running" }, spinner(), session.current ? ["Running ", h("b", null, session.current.name), runIterations() > 1 ? ` (iteration ${iterationNumber(session.current.iteration)} of ${runIterations()})` : ""] : "Starting…");
-            else if (!session.result) title = h("span", { class: "bad-text" }, "The run did not start.");
+            else if (!session.result) title = h("span", { class: "bad-text" }, "The run did not start.", session.startError ? ` ${session.startError}` : "");
             else if (session.result.error) title = h("span", { class: "bad-text" }, safeIcon("x"), ` The run failed: ${session.result.error}`);
             else if (session.result.stopped) title = h("span", { class: "warn-text" }, safeIcon("stop"), " Stopped after ", plural(done, "request"));
             else title = failedAny ? h("span", { class: "bad-text" }, safeIcon("x"), ` ${plural(stats.failed + stats.errors, "request")} failed`) : h("span", { class: "good-text" }, safeIcon("check"), " All requests passed");
@@ -687,6 +699,15 @@
                 toolbar.appendChild(pickFailed);
             }
             toolbar.appendChild(h("span", { class: "spacer" }));
+            // a script pointed a request at a local file that is not allowed: it was not sent; offer to allow it
+            const needs = !busy && session.result && session.result.needsFileApproval;
+            if (needs && needs.files && needs.files.length && session.suiteId === currentSuiteId) {
+                const allow = h("button", { class: "btn small", type: "button" }, safeIcon("lock"), "Allow and run again…");
+                allow.addEventListener("click", async () => { if (await App.allowUploads(needs, "run")) run(); });
+                toolbar.appendChild(h("div", { class: "callout warn rn-cli-note", style: { flexBasis: "100%" } }, safeIcon("alert"),
+                    h("span", null, `${plural(needs.files.length, "local file")} not sent: `, needs.files.slice(0, 3).map((f, i) => [i ? ", " : "", h("code", null, f.path)]),
+                        needs.files.length > 3 ? " …" : "", ". API Tester asks before it uploads a file that was not chosen in this app."), allow));
+            }
             if (!busy && (session.result || session.results.length)) {
                 const exportBtn = (format, label) => {
                     const b = h("button", { class: "btn small", type: "button" }, label);

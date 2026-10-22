@@ -5,6 +5,13 @@
 //
 // State kept here (not persisted): per suite id the runtime variables (captures), the cookie jar and the
 // OAuth2 token cache; the running suite runs; the last run result; the local echo server.
+//
+// Local files: the page only names files, main decides what it may touch. A path from the page is accepted only
+// when the user chose it in this session (file dialogs, files opened with the app) or the app wrote it (reports,
+// exported suites). Uploads of local files (multipart file fields, binary bodies) need the user's approval per
+// suite (workspace.fileApprovals): files picked with the app's file chooser are approved; any other file, e.g.
+// one named by an imported suite, is not sent until the user allows it in a native dialog shown by main
+// ("files.approve"), so neither a shared suite nor a compromised page can upload files on its own.
 const fs = require("fs");
 const path = require("path");
 const { app, dialog, shell, BrowserWindow, nativeTheme } = require("electron");
@@ -14,6 +21,10 @@ const { writeFileAtomic } = require("./workspace");
 
 const MAX_IMPORT_BYTES = 50 * 1024 * 1024;
 const MAX_DATA_FILE_BYTES = 20 * 1024 * 1024;
+// "Allow once" covers the next send / run of the suite started within this time
+const ONCE_APPROVAL_MS = 2 * 60 * 1000;
+// files.openPath opens only reports this session saved (never programs or scripts)
+const OPENABLE_REPORT = /\.(html?|xml|json)$/i;
 // runs with many requests: results after this many keep a shorter response body (memory, IPC size)
 const FULL_BODY_RESULTS = 100;
 const TRIMMED_BODY_CHARS = 64 * 1024;
@@ -48,6 +59,78 @@ function intIn(value, fallback, min, max) {
     const n = Number(value);
     if (value === "" || value === null || value === undefined || !Number.isFinite(n)) return fallback;
     return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+/** "https://host:port" of a URL (shown in the upload approval); the text itself when it is no URL. */
+function originOf(url) {
+    try {
+        const u = new URL(String(url));
+        return `${u.protocol}//${u.host}`;
+    } catch (_) {
+        return String(url || "");
+    }
+}
+
+/**
+ * May the app look at this path on disk at all (real path, link target)? An absolute local path. Never a Windows
+ * network or device path (\\server\share, //server/share, \\?\..., \\.\...): only touching it makes Windows connect
+ * to that computer and log in with the user's Windows (NTLM) credentials, so a shared suite could collect them.
+ * Uses core's rule (prepare.isUploadablePath) when it has one, so the app and the upload itself agree.
+ */
+function isLocalPath(file) {
+    if (typeof file !== "string" || !file || file.includes("\0")) return false;
+    let prepare = null;
+    try { prepare = core("prepare"); } catch (_) { /* own rule below */ }
+    if (prepare && typeof prepare.isUploadablePath === "function") {
+        try { return !!prepare.isUploadablePath(file); } catch (_) { return false; }
+    }
+    if (!path.isAbsolute(file)) return false;
+    return !(process.platform === "win32" && /^[\\/]{2}/.test(file));
+}
+
+/**
+ * Real path of a file (symbolic links resolved), or null. Only for files the user chose or allowed (and only
+ * local ones): a path named by a suite is never touched before the user said yes.
+ */
+function realPathOf(file) {
+    if (!isLocalPath(file)) return null;
+    try {
+        return fs.realpathSync(file);
+    } catch (_) {
+        return null;
+    }
+}
+
+/** Where a symbolic link points (one step, for the approval dialog; nothing is followed), or null. */
+function linkTargetOf(file) {
+    if (!isLocalPath(file)) return null;
+    try {
+        if (!fs.lstatSync(file).isSymbolicLink()) return null;
+        return path.resolve(path.dirname(file), fs.readlinkSync(file));
+    } catch (_) {
+        return null;
+    }
+}
+
+/** Does the request (as saved or edited) upload a local file? Cheap check before preparing it. */
+function hasFileBody(request) {
+    const b = request && request.body;
+    if (!b) return false;
+    if (b.mode === "binary") return !!String(b.binaryPath || "").trim();
+    if (b.mode === "multipart") return (b.multipart || []).some((p) => p && p.enabled !== false && p.type === "file" && String(p.filePath || "").trim());
+    return false;
+}
+
+/** Local files of a prepared request: [{ path, kind, field }] (absolute paths as resolved by prepare.js). */
+function uploadsOf(prepared) {
+    const out = [];
+    const push = (f) => { if (f && typeof f.path === "string" && f.path && !out.some((o) => o.path === f.path)) out.push(f); };
+    for (const f of Array.isArray(prepared && prepared.files) ? prepared.files : []) push({ path: f.path, kind: f.kind || "", field: f.field || "" });
+    if (prepared && typeof prepared.binaryPath === "string") push({ path: prepared.binaryPath, kind: "binary", field: "" });
+    for (const part of (prepared && prepared.multipart) || []) {
+        if (part && part.type === "file") push({ path: part.filePath, kind: "multipart", field: part.key || "" });
+    }
+    return out;
 }
 
 /** Request object from the renderer -> normalised request (same id, defaults filled). */
@@ -145,6 +228,22 @@ class EchoManager {
  * deps: { workspace, log, dataDir, logDir, cliCommand: () => string, getWindow: (sender) => BrowserWindow|null }
  * Returns { methods, dispatch(sender, method, args), echo, shutdown() }.
  */
+// Company root certificates: the Settings file plus NODE_EXTRA_CA_CERTS (ignored by the hardened runtime itself).
+let caStatus = { count: 0, sources: [], error: null };
+function applyTrustedCa(settings, log) {
+    const { applyExtraCaFiles, envCaFiles } = require("../core/tlsTrust");
+    const files = [...envCaFiles(), ...(settings && settings.extraCaFile ? [{ path: settings.extraCaFile, label: "Trusted CA certificates file" }] : [])];
+    try {
+        caStatus = { ...applyExtraCaFiles(files), error: null };
+    } catch (err) {
+        // keep working with the built-in roots; Settings shows the problem
+        try { applyExtraCaFiles([]); } catch (_) { /* bundled roots only */ }
+        caStatus = { count: 0, sources: [], error: err.message };
+        if (log) log("warn", err.message);
+    }
+    return caStatus;
+}
+
 function createApi({ workspace, log, dataDir, logDir, cliCommand, getWindow }) {
     const sessions = new Map(); // suite id -> { runtime, cookieJar, oauthCache }
     const inflight = new Map(); // webContents id -> Set<AbortController> of single requests
@@ -177,6 +276,138 @@ function createApi({ workspace, log, dataDir, logDir, cliCommand, getWindow }) {
     const dialogParent = (sender) => getWindow(sender) || undefined;
     const startDir = () => lastDir || app.getPath("documents");
     const remember = (file) => { if (file) lastDir = path.dirname(file); };
+
+    // ------------------------------------------------------------------ local files the page may name
+    const pickedFiles = new Set(); // chosen in this session's open dialogs: may be read (data files) and imported
+    const openedFiles = new Set(); // opened with the app (file manager, command line, Dock): may be imported
+    const writtenFiles = new Set(); // saved by this session's save dialogs: may be opened (reports) and shown in the folder
+    const onceApprovals = new Map(); // suite key -> { files: Set, expires }: "Allow once", for the next send / run
+
+    /** Approval key of a suite id: the id of an existing suite, "" for unsaved requests. */
+    const suiteKey = (suiteId) => (typeof suiteId === "string" && suiteId && workspace.getSuite(suiteId) ? suiteId : "");
+    const peekOnce = (key) => {
+        const entry = onceApprovals.get(key);
+        if (entry && entry.expires > Date.now()) return entry.files;
+        onceApprovals.delete(key);
+        return new Set();
+    };
+    const takeOnce = (key) => {
+        const files = peekOnce(key);
+        onceApprovals.delete(key);
+        return files;
+    };
+    /**
+     * Approved for this suite: the path, and also the file it really is when it is a link (a link changed later is
+     * asked again). check.path(file): the same for a path read from a request; the real file is looked up only
+     * when the path itself is allowed (a path from a suite is not touched before the user allowed it).
+     */
+    const approvedWith = (key, once) => {
+        const ok = (p) => typeof p === "string" && (once.has(p) || workspace.isFileApproved(key, p));
+        const check = (file, details) => {
+            const real = details && typeof details.realPath === "string" ? details.realPath : null;
+            return ok(file) && (!real || real === file || ok(real));
+        };
+        check.path = (file) => ok(file) && check(file, { realPath: realPathOf(file) });
+        return check;
+    };
+    /** The paths to remember for an approval (only after the user allowed them): the path and, when it is a link, the real file. */
+    const approvalPaths = (files) => {
+        const out = new Set();
+        for (const f of files) {
+            out.add(f);
+            const real = realPathOf(f);
+            if (real) out.add(real);
+        }
+        return [...out];
+    };
+
+    /**
+     * For one send or run: approveFile for core (prepare.js asks it before reading a local file) that uses the
+     * suite's approvals plus "Allow once" (taken now), and remembers what it refused.
+     */
+    function uploadGate(key) {
+        const isApproved = approvedWith(key, takeOnce(key));
+        const denied = [];
+        return {
+            denied,
+            approveFile(file, details) {
+                if (isApproved(file, details)) return true;
+                const p = String(file);
+                if (!denied.some((d) => d.path === p)) {
+                    denied.push({ path: p, kind: (details && details.kind) || "", field: (details && details.field) || "" });
+                    log.warn(`Not sent: the upload of the local file ${p} is not allowed yet`);
+                }
+                return false;
+            }
+        };
+    }
+
+    /**
+     * Local files a request would upload with the variables as they are now (nothing is read or sent, no script
+     * runs, no token is fetched): [{ path, kind, field, origin, approved }]. A path that still holds a {{variable}}
+     * is left out (a script sets it; the file is checked again when it is sent).
+     */
+    async function plannedUploads({ key, request, suite, parents, scope }) {
+        if (!hasFileBody(request)) return [];
+        const check = approvedWith(key, peekOnce(key));
+        const answers = new Map();
+        let prepared;
+        try {
+            prepared = await core("prepare").prepareRequest(request, {
+                suite, parents, scope, settings: settings(), oauthCache: session(key).oauthCache, preview: true,
+                approveFile: (file, details) => {
+                    const ok = check(file, details);
+                    answers.set(file, ok);
+                    return ok;
+                }
+            });
+        } catch (err) {
+            if (err && err.code === "FILE_NOT_APPROVED" && err.filePath) {
+                return [{ path: String(err.filePath), kind: err.kind || "", field: err.field || "", origin: err.host ? originOf(`https://${err.host}`) : "", approved: false }];
+            }
+            return []; // a problem the send itself reports
+        }
+        const origin = originOf(prepared.url);
+        return uploadsOf(prepared)
+            .filter((f) => !f.path.includes("{{"))
+            .map((f) => ({ ...f, origin, approved: answers.has(f.path) ? answers.get(f.path) : check.path(f.path) }));
+    }
+
+    /** What the page needs to ask for an approval: { suiteId, suiteName, files: [{ path, kind, field, origin, requestName }] } */
+    function approvalRequest(key, files) {
+        const suite = key ? workspace.getSuite(key) : null;
+        return { suiteId: suite ? suite.id : null, suiteName: suite ? suite.name : "", files };
+    }
+
+    /** Result of a request that was not sent because it uploads files that are not allowed yet. */
+    function notSentResult(rc, key, files) {
+        const first = files[0];
+        const message = files.length === 1
+            ? `This request uploads the local file ${first.path}${first.origin ? ` to ${first.origin}` : ""}. Allow it first.`
+            : `This request uploads ${files.length} local files (${files.map((f) => f.path).join(", ")}). Allow them first.`;
+        return {
+            requestId: rc.request.id,
+            name: rc.request.name,
+            method: String(rc.request.method || "GET").toUpperCase(),
+            url: String(rc.request.url || ""),
+            path: rc.parents.map((p) => p.name),
+            iteration: 1,
+            prepared: null,
+            response: null,
+            assertions: [],
+            captures: [],
+            scripts: { pre: null, post: null },
+            logs: [{ level: "warn", message, source: "runner" }],
+            passed: false,
+            error: message,
+            errorCode: "FILE_NOT_APPROVED",
+            notSent: true,
+            startedAt: new Date().toISOString(),
+            durationMs: 0,
+            variablesChanged: { environment: false, globals: false },
+            needsFileApproval: approvalRequest(key, files.map((f) => ({ ...f, requestName: rc.request.name })))
+        };
+    }
 
     /**
      * Working context of a request: a copy of the saved suite (or an empty one when the suite is gone, e.g. a
@@ -322,6 +553,9 @@ function createApi({ workspace, log, dataDir, logDir, cliCommand, getWindow }) {
     }
 
     async function importPath(file) {
+        if (typeof file !== "string" || !(pickedFiles.has(file) || openedFiles.has(file))) {
+            throw new Error("Choose the file with Import… (or open it with API Tester from the file manager).");
+        }
         checkFile(file, MAX_IMPORT_BYTES, "file");
         const result = await core("suiteFile").importFile(file);
         remember(file);
@@ -345,13 +579,16 @@ function createApi({ workspace, log, dataDir, logDir, cliCommand, getWindow }) {
             isPackaged: app.isPackaged,
             cliCommand: cliCommand(),
             isPortable: process.platform === "win32" && !!process.env.PORTABLE_EXECUTABLE_FILE,
-            echoServer: echo.status()
+            echoServer: echo.status(),
+            trustedCa: caStatus
         }),
         "app.openExternal": async (_ctx, url) => {
             if (typeof url !== "string" || !/^https:\/\//i.test(url)) throw new Error("Only https links can be opened");
             await shell.openExternal(url);
             return true;
         },
+        // how saved secrets are stored: "encrypted" (system keychain), "plaintext" (no keychain), "none" (no secrets yet)
+        "app.secretStorage": () => workspace.secretState,
         "app.openDataFolder": async () => {
             fs.mkdirSync(dataDir, { recursive: true });
             const error = await shell.openPath(dataDir);
@@ -388,17 +625,31 @@ function createApi({ workspace, log, dataDir, logDir, cliCommand, getWindow }) {
         },
 
         // ------------------------------------------------------------------ workspace
-        "workspace.load": () => workspace.load(),
+        "workspace.load": async () => {
+            const loaded = await workspace.loadAsync();
+            applyTrustedCa(loaded && loaded.settings, typeof log === "function" ? log : null);
+            return loaded;
+        },
         "workspace.saveSuite": (_ctx, suite) => workspace.saveSuite(suite),
         "workspace.deleteSuite": async (_ctx, id) => {
-            await workspace.deleteSuite(id);
+            await workspace.deleteSuite(id); // also forgets its file approvals
             sessions.delete(id);
+            onceApprovals.delete(id);
             return true;
         },
         "workspace.reorderSuites": (_ctx, ids) => workspace.reorderSuites(ids),
         "workspace.saveGlobals": (_ctx, vars) => workspace.saveGlobals(vars),
         "workspace.saveSettings": async (_ctx, next) => {
+            if (next && next.extraCaFile) {
+                const before = (workspace.settings && workspace.settings.extraCaFile) || "";
+                if (next.extraCaFile !== before && !pickedFiles.has(next.extraCaFile)) {
+                    throw new Error("Choose the CA certificate file with “Choose file…”.");
+                }
+                // check the file before saving, so a wrong file gives a clear message in Settings
+                require("../core/tlsTrust").applyExtraCaFiles([{ path: String(next.extraCaFile), label: "Trusted CA certificates file" }]);
+            }
             const stored = await workspace.saveSettings(next);
+            applyTrustedCa(stored, typeof log === "function" ? log : null);
             nativeTheme.themeSource = stored.theme;
             return stored;
         },
@@ -418,11 +669,17 @@ function createApi({ workspace, log, dataDir, logDir, cliCommand, getWindow }) {
         "request.send": async (ctx, args) => {
             const rc = requestContext(args || {});
             const suiteId = rc.saved ? rc.saved.id : null;
+            const key = suiteId || "";
+            // a local file that is not allowed yet: nothing is sent (no script, no token request); the page asks
+            const planned = await plannedUploads({ key, request: rc.request, suite: rc.suite, parents: rc.parents, scope: scopeFor(rc) });
+            const missing = planned.filter((f) => !f.approved);
+            if (missing.length) return notSentResult(rc, key, missing);
             const sess = session(suiteId);
             const globalsCopy = clone(workspace.globals);
             const snapshot = takeSnapshot(rc.suite, globalsCopy);
             const controller = new AbortController();
             const untrack = trackRequest(ctx.sender, controller);
+            const gate = uploadGate(key);
             let result;
             try {
                 result = await core("runner").executeRequest({
@@ -436,12 +693,26 @@ function createApi({ workspace, log, dataDir, logDir, cliCommand, getWindow }) {
                     settings: settings(),
                     cookieJar: sess.cookieJar,
                     oauthCache: sess.oauthCache,
-                    signal: controller.signal
+                    signal: controller.signal,
+                    approveFile: gate.approveFile
                 });
             } finally {
                 untrack();
             }
+            const refused = gate.denied.length ? gate.denied
+                : result.errorCode === "FILE_NOT_APPROVED" && result.fileApproval && result.fileApproval.filePath
+                    ? [{ path: String(result.fileApproval.filePath), kind: result.fileApproval.kind || "", field: result.fileApproval.field || "" }] : [];
+            if (refused.length) {
+                // the pre-request script pointed the body at another file: not sent (no history entry); the page asks
+                const origin = originOf(result.url || "");
+                result.needsFileApproval = approvalRequest(key, refused.map((f) => ({ ...f, origin, requestName: rc.request.name })));
+                await mergeChanges(suiteId, rc.suite, globalsCopy, snapshot);
+                return result;
+            }
             const response = result.response || {};
+            // core's copy without credentials (Auth-tab secrets left out, credential headers and secrets masked):
+            // the history never holds secrets; reopening an entry asks for them again
+            const historyRequest = result.historyRequest || core("secrets").redactRequest(rc.request);
             const entry = {
                 id: model.newId("h"),
                 time: new Date().toISOString(),
@@ -453,7 +724,8 @@ function createApi({ workspace, log, dataDir, logDir, cliCommand, getWindow }) {
                 status: Number(response.status) || 0,
                 durationMs: Number.isFinite(result.durationMs) ? result.durationMs : (response.timings && response.timings.total) || 0,
                 passed: !!result.passed,
-                request: rc.request
+                request: historyRequest,
+                credentialsRemoved: JSON.stringify(historyRequest) !== JSON.stringify(rc.request)
             };
             const history = workspace.addHistory(entry);
             broadcast("history-changed", { history, entry: history[0] && history[0].id === entry.id ? history[0] : null });
@@ -515,13 +787,14 @@ function createApi({ workspace, log, dataDir, logDir, cliCommand, getWindow }) {
         },
 
         // ------------------------------------------------------------------ runner
-        "runner.start": (ctx, args) => {
+        "runner.start": async (ctx, args) => {
             const a = args || {};
             const saved = workspace.getSuite(a.suiteId);
             if (!saved) throw new Error("Suite not found. It may have been deleted.");
             const suite = clone(saved);
             const itemIds = Array.isArray(a.itemIds) ? a.itemIds.filter((id) => typeof id === "string") : [];
-            if (!model.collectRequests(suite, itemIds).length) throw new Error("Nothing to run: the selection contains no requests.");
+            const selected = model.collectRequests(suite, itemIds);
+            if (!selected.length) throw new Error("Nothing to run: the selection contains no requests.");
             let data = null;
             if (typeof a.dataText === "string" && a.dataText.trim()) {
                 data = dataFileSummary(a.dataText, a.dataFileName || "data.csv").rows;
@@ -532,6 +805,22 @@ function createApi({ workspace, log, dataDir, logDir, cliCommand, getWindow }) {
             const envId = a.environmentId === undefined ? suite.activeEnvironmentId : a.environmentId || null;
             const environmentId = envId && suite.environments.some((e) => e.id === envId) ? envId : null;
             const globalsCopy = clone(workspace.globals);
+
+            // local files the run would upload that are not allowed yet: the run does not start, the page asks first
+            const key = saved.id;
+            const environment = environmentId ? suite.environments.find((e) => e.id === environmentId) : null;
+            const firstRow = data && data[0] && typeof data[0] === "object" ? Object.fromEntries(Object.entries(data[0]).map(([k, v]) => [k, v == null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v)])) : null;
+            const missing = [];
+            for (const { request, parents } of selected) {
+                if (!hasFileBody(request)) continue;
+                const scope = createScope({ globals: clone(globalsCopy), suite, parents, environment, data: firstRow, runtime: { ...session(key).runtime } });
+                for (const f of await plannedUploads({ key, request, suite, parents, scope })) {
+                    if (!f.approved && !missing.some((m) => m.path === f.path)) missing.push({ ...f, requestName: request.name });
+                }
+            }
+            if (missing.length) return { runId: null, needsFileApproval: approvalRequest(key, missing) };
+
+            const gate = uploadGate(key);
             const snapshot = takeSnapshot(suite, globalsCopy);
             const runId = model.newId("run");
             const controller = new AbortController();
@@ -547,6 +836,14 @@ function createApi({ workspace, log, dataDir, logDir, cliCommand, getWindow }) {
                 const finish = async (runResult) => {
                     if (doneSent) return;
                     doneSent = true;
+                    // requests whose (script-set) file was not allowed were not sent: the runner offers to allow them
+                    if (gate.denied.length) {
+                        const names = new Map((runResult.results || []).filter((r) => r && r.errorCode === "FILE_NOT_APPROVED" && r.fileApproval)
+                            .map((r) => [r.fileApproval.filePath, { name: r.name, origin: originOf(r.url) }]));
+                        runResult.needsFileApproval = approvalRequest(key, gate.denied.map((f) => ({
+                            ...f, requestName: (names.get(f.path) || {}).name || "", origin: (names.get(f.path) || {}).origin || ""
+                        })));
+                    }
                     lastRun = runResult;
                     runs.delete(runId);
                     await mergeChanges(saved.id, suite, globalsCopy, snapshot).catch(() => {});
@@ -566,6 +863,7 @@ function createApi({ workspace, log, dataDir, logDir, cliCommand, getWindow }) {
                         stopOnFailure: !!a.stopOnFailure,
                         settings: settings(),
                         signal: controller.signal,
+                        approveFile: gate.approveFile,
                         onEvent: (event) => {
                             if (!event || typeof event !== "object") return;
                             if (event.type === "run-done") return; // sent by finish(), after the variable changes are saved
@@ -604,6 +902,7 @@ function createApi({ workspace, log, dataDir, logDir, cliCommand, getWindow }) {
                 ]
             });
             if (res.canceled || !res.filePaths || !res.filePaths[0]) return null;
+            pickedFiles.add(res.filePaths[0]);
             return importPath(res.filePaths[0]);
         },
         "files.importText": (_ctx, text, fileName) => {
@@ -624,6 +923,7 @@ function createApi({ workspace, log, dataDir, logDir, cliCommand, getWindow }) {
             });
             if (res.canceled || !res.filePath) return null;
             await writeFileAtomic(res.filePath, text);
+            writtenFiles.add(res.filePath);
             remember(res.filePath);
             log.info(`Suite "${suite.name}" exported to ${res.filePath}`);
             return res.filePath;
@@ -645,21 +945,29 @@ function createApi({ workspace, log, dataDir, logDir, cliCommand, getWindow }) {
                 filters: [{ name: kind.name, extensions: [kind.ext] }]
             });
             if (res.canceled || !res.filePath) return null;
-            await writeFileAtomic(res.filePath, kind.render(run));
+            await writeFileAtomic(res.filePath, await kind.render(run));
+            writtenFiles.add(res.filePath);
             remember(res.filePath);
             return res.filePath;
         },
+        // only reports saved in this session (Open after "Report: HTML"), never another file or program
         "files.openPath": async (_ctx, file) => {
             if (typeof file !== "string" || !file) throw new Error("No file given");
+            if (!writtenFiles.has(file) || !OPENABLE_REPORT.test(file)) throw new Error("Only reports saved in this session can be opened from here.");
             const error = await shell.openPath(file);
             if (error) throw new Error(error);
             return true;
         },
         "files.showItem": (_ctx, file) => {
             if (typeof file !== "string" || !file) throw new Error("No file given");
+            if (!writtenFiles.has(file)) throw new Error("Only files saved in this session can be shown from here.");
             shell.showItemInFolder(file);
             return true;
         },
+        /**
+         * Native file chooser. options: { title, filters, purpose: "upload" | "data", suiteId }. A file chosen for an
+         * upload is allowed for the requests of that suite (suiteId; none: unsaved requests): the user picked it.
+         */
         "files.pickFile": async (ctx, options) => {
             const o = isObject(options) ? options : {};
             const filters = (Array.isArray(o.filters) ? o.filters : [])
@@ -672,15 +980,149 @@ function createApi({ workspace, log, dataDir, logDir, cliCommand, getWindow }) {
                 filters: filters.length ? [...filters, { name: "All files", extensions: ["*"] }] : []
             });
             if (res.canceled || !res.filePaths || !res.filePaths[0]) return null;
-            remember(res.filePaths[0]);
-            return res.filePaths[0];
+            const file = res.filePaths[0];
+            pickedFiles.add(file);
+            remember(file);
+            if (o.purpose === "upload") {
+                const key = suiteKey(o.suiteId);
+                await workspace.approveFiles(key, approvalPaths([file]));
+                log.info(`Upload of ${file} allowed for ${key ? `suite "${workspace.getSuite(key).name}"` : "unsaved requests"} (chosen in the file dialog)`);
+            }
+            return file;
         },
         "files.readDataFile": (_ctx, file) => {
+            if (typeof file !== "string" || !pickedFiles.has(file)) throw new Error("Choose the data file with “Choose file…” (or drop it on the box).");
             checkFile(file, MAX_DATA_FILE_BYTES, "data file");
             const text = fs.readFileSync(file, "utf8").replace(/^﻿/, "");
             const fileName = path.basename(file);
             const { rows, columns } = dataFileSummary(text, fileName);
             return { fileName, path: file, text, rows: rows.length, columns };
+        },
+
+        // ------------------------------------------------------------------ approvals of local file uploads
+        /**
+         * Asks the user in a native dialog (shown by main, so the page cannot answer it) whether local files may be
+         * uploaded: "Allow once" (next send / run), "Always for this suite" (remembered on this computer) or Cancel.
+         * args: { suiteId, files: [{ path, origin, requestName }], context: "send" | "run" } (or { suiteId, path, origin })
+         * -> { approved, persist }
+         */
+        "files.approve": async (ctx, args) => {
+            const a = isObject(args) ? args : {};
+            const key = suiteKey(a.suiteId);
+            const suite = key ? workspace.getSuite(key) : null;
+            const files = [];
+            for (const f of Array.isArray(a.files) ? a.files : [a]) {
+                if (!isObject(f) || typeof f.path !== "string" || !path.isAbsolute(f.path) || files.some((x) => x.path === f.path)) continue;
+                if (!isLocalPath(f.path)) {
+                    throw new Error(`${f.path} is on a network share or is a device path. Such files cannot be uploaded: copy the file to this computer and choose the copy.`);
+                }
+                // shown in the dialog; the real file is looked up (and remembered) only once the user allowed it
+                const link = linkTargetOf(f.path);
+                files.push({
+                    path: f.path,
+                    real: link && link !== f.path ? link : null,
+                    origin: typeof f.origin === "string" ? f.origin.slice(0, 300) : "",
+                    requestName: typeof f.requestName === "string" ? f.requestName.slice(0, 200) : ""
+                });
+            }
+            if (!files.length) throw new Error("No local file to allow");
+            const one = files.length === 1 ? files[0] : null;
+            const line = (f) => `• ${f.path}${f.real ? ` (link to ${f.real})` : ""}${f.origin ? `  →  ${f.origin}` : ""}${f.requestName && !one ? `  (${f.requestName})` : ""}`;
+            const list = files.slice(0, 12).map(line);
+            if (files.length > 12) list.push(`… and ${files.length - 12} more`);
+            const run = a.context === "run";
+            const detail = [
+                one ? `${one.requestName ? `The request “${one.requestName}”` : "This request"} sends this file from your computer${one.origin ? ` to ${one.origin}` : ""}.${one.real ? ` It is a link to ${one.real}.` : ""}`
+                    : `${run ? "This run" : "This request"} sends these files from your computer:\n${list.join("\n")}`,
+                "",
+                "Only allow files you expect to send. A suite from someone else can name any file on your computer, for example SSH keys or saved passwords.",
+                "",
+                `Allow once: only for ${run ? "this run" : "this send"}. Always: remembered on this computer for ${suite ? `the suite “${suite.name}”` : "unsaved requests"} (never exported with the suite); remove it in the request's Body tab.`
+            ].join("\n");
+            const { response } = await dialog.showMessageBox(dialogParent(ctx.sender), {
+                type: "warning",
+                title: "Allow file upload?",
+                message: one ? `Allow upload of ${one.path}${one.origin ? ` to ${one.origin}` : ""}?` : `Allow upload of ${files.length} local files?`,
+                detail,
+                buttons: ["Allow once", suite ? "Always for this suite" : "Always for unsaved requests", "Cancel"],
+                defaultId: 2,
+                cancelId: 2,
+                noLink: true
+            });
+            const where = suite ? `suite "${suite.name}"` : "unsaved requests";
+            const paths = response === 0 || response === 1 ? approvalPaths(files.map((f) => f.path)) : [];
+            if (response === 0) {
+                const entry = { files: new Set([...peekOnce(key), ...paths]), expires: Date.now() + ONCE_APPROVAL_MS };
+                onceApprovals.set(key, entry);
+                log.info(`Upload allowed once (${where}): ${files.map((f) => f.path).join(", ")}`);
+                return { approved: true, persist: false };
+            }
+            if (response === 1) {
+                await workspace.approveFiles(key, paths);
+                log.info(`Upload always allowed (${where}): ${files.map((f) => f.path).join(", ")}`);
+                return { approved: true, persist: true };
+            }
+            return { approved: false, persist: false };
+        },
+        /**
+         * Approval state of the files a request uploads (for the Body tab):
+         * args: { suiteId, requestId, request, environmentId } -> [{ path, kind, field, approved, remembered, variable }]
+         */
+        "files.approvalState": async (_ctx, args) => {
+            const rc = requestContext(args || {});
+            const key = rc.saved ? rc.saved.id : "";
+            if (!hasFileBody(rc.request)) return [];
+            const scope = scopeFor(rc);
+            let prepared;
+            const answers = new Map();
+            const check = approvedWith(key, peekOnce(key));
+            try {
+                prepared = await core("prepare").prepareRequest(rc.request, {
+                    suite: rc.suite, parents: rc.parents, scope, settings: settings(), oauthCache: session(key).oauthCache, preview: true,
+                    approveFile: (file, details) => { const ok = check(file, details); answers.set(file, ok); return ok; }
+                });
+            } catch (_) {
+                return [];
+            }
+            return uploadsOf(prepared).map((f) => ({
+                ...f,
+                variable: f.path.includes("{{"),
+                approved: answers.has(f.path) ? answers.get(f.path) : check.path(f.path),
+                remembered: workspace.isFileApproved(key, f.path)
+            }));
+        },
+        /** Removes a remembered approval: args { suiteId, path }. */
+        "files.revokeApproval": async (_ctx, args) => {
+            const a = isObject(args) ? args : {};
+            if (typeof a.path !== "string") throw new Error("No file given");
+            const key = suiteKey(a.suiteId);
+            // the real file of a link is looked up only for a path that is allowed now
+            const paths = workspace.isFileApproved(key, a.path) || peekOnce(key).has(a.path) ? approvalPaths([a.path]) : [a.path];
+            for (const p of paths) await workspace.revokeFile(key, p);
+            const entry = onceApprovals.get(key);
+            if (entry) for (const p of paths) entry.files.delete(p);
+            log.info(`Upload approval removed: ${a.path}`);
+            return true;
+        },
+        /** Forgets every approval of a suite (its content was replaced by an imported file). */
+        "files.forgetApprovals": async (_ctx, suiteId) => {
+            const key = suiteKey(suiteId);
+            if (!key) return true;
+            onceApprovals.delete(key);
+            await workspace.clearFileApprovals(key);
+            return true;
+        },
+        /**
+         * An unsaved request was saved into a suite: its files that were allowed for unsaved requests stay allowed
+         * there (nothing new is approved). args: { toSuiteId, paths }
+         */
+        "files.carryApprovals": async (_ctx, args) => {
+            const a = isObject(args) ? args : {};
+            const to = suiteKey(a.toSuiteId);
+            if (!to) return [];
+            const carried = (Array.isArray(a.paths) ? a.paths : []).filter((p) => typeof p === "string" && workspace.isFileApproved("", p));
+            if (carried.length) await workspace.approveFiles(to, approvalPaths(carried).filter((p) => workspace.isFileApproved("", p)));
+            return carried;
         },
 
         // ------------------------------------------------------------------ tools
@@ -730,7 +1172,12 @@ function createApi({ workspace, log, dataDir, logDir, cliCommand, getWindow }) {
         } catch (_) { /* logged by EchoManager; the Settings dialog shows the error */ }
     }
 
-    return { methods, dispatch, echo, shutdown, autoStartEcho };
+    /** A file the user opened with the app (file manager, command line, Dock): the page may import it. */
+    function allowImport(file) {
+        if (typeof file === "string" && file) openedFiles.add(file);
+    }
+
+    return { methods, dispatch, echo, shutdown, autoStartEcho, allowImport };
 }
 
 module.exports = { createApi, EchoManager, normalizeRequest, changedVariables, upsertVariables };

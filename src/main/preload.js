@@ -2,8 +2,9 @@
 // Bridge between the sandboxed renderer and the main process. The page only sees window.api:
 //   api.call(method, ...args) -> Promise (rejects with Error(message))
 //   api.on(channel, cb)       -> unsubscribe function
-//   api.pathForFile(file)     -> absolute path of a File from drag & drop (or null)
-const { contextBridge, ipcRenderer, webUtils } = require("electron");
+// Files dropped on the window are read by the page itself (File.text()), so no file paths cross this bridge
+// from the page; main accepts paths only from its own dialogs and from files opened with the app.
+const { contextBridge, ipcRenderer } = require("electron");
 
 const EVENTS = ["history-changed", "suite-changed", "globals-changed", "runner-event", "menu", "open-file", "echo-changed"];
 
@@ -24,12 +25,5 @@ contextBridge.exposeInMainWorld("api", {
         // files opened before the page listened (double-click on a suite at app start) are delivered now
         if (channel === "open-file") ipcRenderer.send("api-listening", channel);
         return () => ipcRenderer.removeListener(channel, listener);
-    },
-    pathForFile(file) {
-        try {
-            return webUtils.getPathForFile(file) || null;
-        } catch (_) {
-            return null;
-        }
     }
 });

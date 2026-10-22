@@ -1,5 +1,11 @@
-# Tests the command line version, then builds the installers natively on each OS.
-# Push a tag like v1.0.0 to attach the installers to a GitHub release.
+# Tests the command line version, checks the dependencies, then builds the installers natively on each OS.
+# Push a tag like v1.0.1 to publish a GitHub release with the installers, SHA256SUMS.txt, an SBOM and a build
+# provenance attestation (see SECURITY.md, "Verifying a download").
+#
+# Supply chain: every action is pinned to a full commit SHA (the tag is in the comment; Dependabot keeps them
+# current), the token is read-only except in the release job, and checkouts do not keep the token in .git/config.
+# npm ci runs no install scripts in any job, and no npm cache is used: every job, the release build included,
+# installs exactly what package-lock.json pins, straight from the registry.
 name: Build installers
 
 on:
@@ -9,17 +15,40 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
+  # known vulnerabilities and registry signatures of the dependencies
+  dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # all dependencies (the build tools make the installers), no install scripts needed for the checks
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      # what ships (app.asar, Docker image): fail on high / critical advisories
+      - name: npm audit (shipped dependencies)
+        run: npm audit --omit=dev --audit-level=high
+      # every package was published by the registry it claims (and has its provenance checked where present)
+      - name: npm audit signatures
+        run: npm audit signatures
+
   # the sample suite against the built-in test API, with plain Node.js (no Electron needed)
   cli-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-          cache: npm
-      - run: npm ci --omit=dev --no-audit --no-fund
+      - run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund
       # samples/ is generated from src/core/sample.js (npm run samples); ids and export time are ignored
       - name: Check that samples/ is up to date
         run: npm run samples:check
@@ -27,16 +56,18 @@ jobs:
         run: node src/cli.js run samples/sample.apisuite --echo-server --reporter cli,junit,html --out reports
       - name: Data-driven run (one iteration per CSV row)
         run: node src/cli.js run samples/sample.apisuite --echo-server --folder "6. Data-driven and scripts" --data samples/sample-users.csv
-      - uses: actions/upload-artifact@v4
+      # for looking at a failed run; never published with a release (the release job takes installers-* only)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: sample-run-reports
           path: reports/
           if-no-files-found: ignore
+          retention-days: 7
 
   build:
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: cli-test
+    needs: [cli-test, dependencies]
     strategy:
       fail-fast: false
       matrix:
@@ -49,23 +80,43 @@ jobs:
             target: --mac
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-          cache: npm
-      - run: npm ci
+      # no install scripts: electron-builder downloads Electron for each target itself (checked against its
+      # checksums), and build/afterPack.js runs Electron's install.js only if the macOS licence notices need it
+      - run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Build
         run: npx electron-builder ${{ matrix.target }} --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      # package.json build.electronFuses must be set in what ships (on Linux in the real binary, api-tester.bin)
+      - name: Check the Electron fuses of the built apps
+        shell: bash
+        run: |
+          CHECKED=0
+          for APP in dist/linux-unpacked/api-tester.bin dist/linux-arm64-unpacked/api-tester.bin \
+                     "dist/mac/API Tester.app" "dist/mac-arm64/API Tester.app" "dist/win-unpacked/API Tester.exe"; do
+            if [ -e "$APP" ]; then node scripts/check-fuses.js "$APP"; CHECKED=$((CHECKED + 1)); fi
+          done
+          test "$CHECKED" -gt 0
+      - name: Check the licence notices of the macOS apps
+        if: matrix.os == 'macos-latest'
+        run: |
+          for APP in dist/mac*/"API Tester.app"; do
+            test -s "$APP/Contents/Resources/LICENSE.electron.txt"
+            test -s "$APP/Contents/Resources/LICENSES.chromium.html"
+          done
       # the Linux packages start through the launcher script written by build/afterPack.js
       # the launcher checks for the app's system libraries first (desktop distributions have them)
       - name: Install runtime libraries for the Linux smoke test
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq libgtk-3-0 libnss3 libgbm1 libxss1 libxtst6 libasound2t64 || sudo apt-get install -y -qq libgtk-3-0 libnss3 libgbm1 libxss1 libxtst6 libasound2
+          sudo apt-get install -y -qq libgtk-3-0 libnss3 libgbm1 libxss1 libxtst6 xvfb libasound2t64 || sudo apt-get install -y -qq libgtk-3-0 libnss3 libgbm1 libxss1 libxtst6 xvfb libasound2
       - name: Smoke test the Linux launcher (command line version, no display)
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -73,6 +124,29 @@ jobs:
           head -c 2 dist/linux-unpacked/api-tester | grep -q '#!'
           env -u DISPLAY -u WAYLAND_DISPLAY dist/linux-unpacked/api-tester --version
           env -u DISPLAY -u WAYLAND_DISPLAY dist/linux-unpacked/api-tester run samples/sample.apisuite --echo-server
+      # the launcher keeps the Chromium sandbox on where the runner allows it; the app must start either way
+      - name: Smoke test the Linux desktop app start (virtual display)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/gui-config"
+          mkdir -p "$XDG_CONFIG_HOME"
+          STATUS=0
+          xvfb-run -a sh -c 'dist/linux-unpacked/api-tester > "$RUNNER_TEMP/gui.log" 2>&1 & PID=$!
+            sleep 15
+            if kill -0 "$PID" 2>/dev/null; then echo "The desktop app is running."; kill "$PID"; exit 0; fi
+            echo "The desktop app exited early:"; exit 1' || STATUS=$?
+          head -n 40 "$RUNNER_TEMP/gui.log"
+          exit $STATUS
+      # CycloneDX SBOM of what the installers contain: the npm packages in app.asar plus Electron / Chromium / Node.js
+      - name: SBOM
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          # the SBOM tool's own dependencies (fetched with npx) are installed without running their install scripts
+          npm_config_ignore_scripts: "true"
+        run: |
+          SBOM="dist/API-Tester-$(node -p "require('./package.json').version")-sbom.cdx.json"
+          npx --yes @cyclonedx/cyclonedx-npm@6.0.1 --omit dev --output-format JSON --output-file "$SBOM"
+          ELECTRON_RUN_AS_NODE=1 dist/linux-unpacked/api-tester.bin scripts/sbom-runtime.js "$SBOM"
       - name: Smoke test the macOS command line wrapper
         if: matrix.os == 'macos-latest'
         run: |
@@ -80,6 +154,7 @@ jobs:
           APP="dist/mac-arm64/API Tester.app"
           [ -d "$APP" ] || APP="dist/mac/API Tester.app"
           test -x "$APP/Contents/Resources/bin/api-tester"
+          codesign --verify --deep --strict "$APP"
           "$APP/Contents/Resources/bin/api-tester" run samples/sample.apisuite --echo-server
       - name: Smoke test the Windows command line wrapper
         if: matrix.os == 'windows-latest'
@@ -88,7 +163,7 @@ jobs:
         run: |
           call dist\win-unpacked\bin\api-tester.cmd --version || exit /b 1
           call dist\win-unpacked\bin\api-tester.cmd run samples\sample.apisuite --echo-server || exit /b 1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installers-${{ matrix.os }}
           path: |
@@ -98,6 +173,7 @@ jobs:
             dist/*.AppImage
             dist/*.deb
             dist/*.tar.gz
+            dist/*-sbom.cdx.json
           if-no-files-found: error
 
   release:
@@ -105,50 +181,93 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # create the release and upload its files
+      id-token: write # sign the build provenance attestation (Sigstore, keyless)
+      attestations: write # store the attestation in this repository
     steps:
-      - uses: actions/download-artifact@v4
+      # only the installer artifacts: test reports and anything else a job uploads are never published
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          pattern: installers-*
           path: artifacts
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
+      - name: Check the release files
+        working-directory: artifacts
+        run: |
+          ls -la
+          for FILE in *; do
+            case "$FILE" in
+              *.exe|*.dmg|*.zip|*.AppImage|*.deb|*.tar.gz|*-sbom.cdx.json) ;;
+              *) echo "Unexpected file, not publishing it: $FILE"; exit 1 ;;
+            esac
+          done
+      - name: SHA256SUMS.txt
+        working-directory: artifacts
+        run: |
+          sha256sum -- * > "$RUNNER_TEMP/SHA256SUMS.txt"
+          mv "$RUNNER_TEMP/SHA256SUMS.txt" SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      # verifiable with: gh attestation verify <file> --repo <this repository>
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          files: artifacts/*
-          body: |
-            ## Which file do I need?
+          subject-path: artifacts/*
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cat > "$RUNNER_TEMP/notes.md" <<'EOF'
+          ## Which file do I need?
 
-            | System | File |
-            |---|---|
-            | Windows 10/11 | `API-Tester-Setup-…-x64.exe` (installer) or `API-Tester-Portable-…-x64.exe` (no installation) |
-            | macOS, Apple silicon (M1 and newer) | `API-Tester-…-mac-arm64.dmg` |
-            | macOS, Intel | `API-Tester-…-mac-x64.dmg` |
-            | Debian / Ubuntu | `API-Tester-…-linux-amd64.deb` (x64) or `…-linux-arm64.deb` (ARM) |
-            | Any Linux | `…-linux-x86_64.AppImage` / `…-linux-arm64.AppImage`, or the `.tar.gz` |
-            | CI pipelines / Docker | build the image from the source code: `docker build -t api-tester .` |
+          | System | File |
+          |---|---|
+          | Windows 10/11 | `API-Tester-Setup-…-x64.exe` (installer) or `API-Tester-Portable-…-x64.exe` (no installation) |
+          | macOS, Apple silicon (M1 and newer) | `API-Tester-…-mac-arm64.dmg` |
+          | macOS, Intel | `API-Tester-…-mac-x64.dmg` |
+          | Debian / Ubuntu | `API-Tester-…-linux-amd64.deb` (x64) or `…-linux-arm64.deb` (ARM) |
+          | Any Linux | `…-linux-x86_64.AppImage` / `…-linux-arm64.AppImage`, or the `.tar.gz` |
+          | CI pipelines / Docker | build the image from the source code: `docker build -t api-tester .` |
 
-            ## First start
+          ## Check the download first
 
-            These builds are not signed with a paid code-signing certificate, so the system asks once before the first start.
+          These builds are not signed with a paid code-signing certificate yet. Before you allow them past SmartScreen
+          or Gatekeeper, check that your file is the one this repository's GitHub Actions run built:
 
-            **macOS** – drag the app to Applications and open it. When macOS says *"API Tester" Not Opened*, click **Done**, then open **System Settings → Privacy & Security**, scroll down and click **Open Anyway** (confirm with your password). Or run once in Terminal:
-            ```
-            xattr -dr com.apple.quarantine "/Applications/API Tester.app"
-            ```
+          - **Checksum**: compare with `SHA256SUMS.txt` from this release.
+            Linux `sha256sum -c SHA256SUMS.txt --ignore-missing`, macOS `shasum -a 256 -c SHA256SUMS.txt --ignore-missing`,
+            Windows PowerShell `Get-FileHash .\API-Tester-Setup-…-x64.exe` (compare the hash with the line in `SHA256SUMS.txt`).
+          - **Build provenance** (GitHub CLI): `gh attestation verify <file> --repo ${{ github.repository }}`
+          - **SBOM**: `API-Tester-…-sbom.cdx.json` (CycloneDX) lists every component in the installers, including Electron, Chromium and Node.js.
 
-            **Windows** – when SmartScreen shows *"Windows protected your PC"*, click **More info → Run anyway** (installer and portable .exe).
+          Security details (network use, data on disk, hardening for organisations, how to report a vulnerability):
+          [SECURITY.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/SECURITY.md)
 
-            **Linux (.deb)** – `sudo apt install ./API-Tester-*-linux-amd64.deb`, then start *API Tester* from the app menu or run `api-tester`.
+          ## First start
 
-            **Linux (AppImage / .tar.gz)** – `chmod +x API-Tester-*.AppImage && ./API-Tester-*.AppImage`, or extract the `.tar.gz` and run `./api-tester`. If system libraries are missing (minimal server images), the launcher prints the exact `apt` / `dnf` command to install them.
+          **macOS** – drag the app to Applications and open it. When macOS says *"API Tester" Not Opened*, click **Done**, then open **System Settings → Privacy & Security**, scroll down and click **Open Anyway** (confirm with your password). Or run once in Terminal:
+          ```
+          xattr -dr com.apple.quarantine "/Applications/API Tester.app"
+          ```
 
-            ## Command line (CI)
+          **Windows** – when SmartScreen shows *"Windows protected your PC"*, click **More info → Run anyway** (installer and portable .exe).
 
-            Run an exported suite without opening a window; exit code 0 = all passed, 1 = failures:
+          **Linux (.deb)** – `sudo apt install ./API-Tester-*-linux-amd64.deb`, then start *API Tester* from the app menu or run `api-tester`.
 
-            | System | Command |
-            |---|---|
-            | Linux (.deb) | `api-tester run my-suite.apisuite --env CI --reporter cli,junit --out reports` |
-            | Linux (AppImage) | `./API-Tester-*.AppImage run my-suite.apisuite` |
-            | macOS | `"/Applications/API Tester.app/Contents/Resources/bin/api-tester" run my-suite.apisuite` |
-            | Windows (installer) | `"%LOCALAPPDATA%\Programs\api-tester\bin\api-tester.cmd" run my-suite.apisuite` |
-            | Docker | `docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" api-tester run my-suite.apisuite` |
+          **Linux (AppImage / .tar.gz)** – `chmod +x API-Tester-*.AppImage && ./API-Tester-*.AppImage`, or extract the `.tar.gz` and run `./api-tester`. If system libraries are missing (minimal server images), the launcher prints the exact `apt` / `dnf` command to install them.
+
+          ## Command line (CI)
+
+          Run an exported suite without opening a window; exit code 0 = all passed, 1 = failures:
+
+          | System | Command |
+          |---|---|
+          | Linux (.deb) | `api-tester run my-suite.apisuite --env CI --reporter cli,junit --out reports` |
+          | Linux (AppImage) | `./API-Tester-*.AppImage run my-suite.apisuite` |
+          | macOS | `"/Applications/API Tester.app/Contents/Resources/bin/api-tester" run my-suite.apisuite` |
+          | Windows (installer) | `"%LOCALAPPDATA%\Programs\api-tester\bin\api-tester.cmd" run my-suite.apisuite` |
+          | Docker | `docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" api-tester run my-suite.apisuite` |
+
+          Secrets for CI: `API_TESTER_VAR_<name>=value` environment variables or `--var-env name=ENV_VAR` keep them out of the command line.
+          EOF
+          gh release create "$TAG" artifacts/* --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag

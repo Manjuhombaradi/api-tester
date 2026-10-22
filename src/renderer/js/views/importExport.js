@@ -42,6 +42,32 @@
         return s;
     }
 
+    /**
+     * Security notes of an import result: from main (result.securityWarnings), or worked out here for an older
+     * result: local files the requests upload, requests with scripts, requests that turn TLS checks off.
+     */
+    function securityNotes(result) {
+        if (Array.isArray(result.securityWarnings)) return result.securityWarnings;
+        const files = [], scripts = [], tls = [];
+        for (const suite of result.suites || []) {
+            walk(suite.items, (item, parents) => {
+                if (item.type !== "request") return true;
+                const name = [...parents.map((p) => p.name), item.name].join(" / ");
+                const b = item.body || {};
+                if (b.mode === "binary" && b.binaryPath) files.push(`"${name}" (${b.binaryPath})`);
+                if (b.mode === "multipart") for (const part of b.multipart || []) if (part && part.enabled !== false && part.type === "file" && part.filePath) files.push(`"${name}" (${part.filePath})`);
+                if (item.scripts && (String(item.scripts.pre || "").trim() || String(item.scripts.post || "").trim())) scripts.push(name);
+                if (item.settings && item.settings.verifyTls === false) tls.push(name);
+                return true;
+            });
+        }
+        const out = [];
+        if (files.length) out.push(`Local files: ${plural(files.length, "file")} of this computer would be uploaded when the requests are sent: ${files.slice(0, 8).join(", ")}${files.length > 8 ? " …" : ""}.`);
+        if (scripts.length) out.push(`Scripts: ${plural(scripts.length, "request")} run JavaScript before or after sending: ${scripts.slice(0, 8).join(", ")}${scripts.length > 8 ? " …" : ""}.`);
+        if (tls.length) out.push(`TLS certificate checks are off for ${plural(tls.length, "request")}: ${tls.slice(0, 8).join(", ")}${tls.length > 8 ? " …" : ""}.`);
+        return out;
+    }
+
     function readDroppedFile(file) {
         if (!file) return Promise.reject(new Error("No file"));
         if (file.size > MAX_FILE_BYTES) return Promise.reject(new Error(`“${file.name}” is larger than 50 MB`));
@@ -93,7 +119,9 @@
         const pasteInsteadBtn = h("button", { class: "btn small ghost", type: "button" }, "Paste text instead");
         const sourceBar = h("div", { class: "ie-source hidden" }, safeIcon("file"), sourceName, h("span", { class: "spacer" }), anotherBtn, pasteInsteadBtn);
 
-        const body = h("div", { class: "ie-dialog" }, sourceArea, sourceBar, preview);
+        // security notes of the previewed file: first thing in the dialog, never below the fold
+        const securityBox = h("div", { class: "callout ie-security hidden", role: "alert" });
+        const body = h("div", { class: "ie-dialog" }, securityBox, sourceArea, sourceBar, preview);
 
         const renderSource = () => {
             const folded = !!result && origin?.from === "file" && !sourceOpen;
@@ -170,9 +198,25 @@
         detectBtn.addEventListener("click", detect);
 
         // ---------------------------------------------------------- preview
+        function renderSecurity() {
+            const notes = result && !error ? securityNotes(result) : [];
+            clear(securityBox);
+            securityBox.classList.toggle("hidden", !notes.length);
+            if (!notes.length) return [];
+            // red when local files would be uploaded, orange for scripts / TLS
+            securityBox.classList.toggle("bad", notes.some((w) => /^Local files/i.test(w)));
+            securityBox.classList.toggle("warn", !notes.some((w) => /^Local files/i.test(w)));
+            add(securityBox, safeIcon("alert"), h("div", { class: "ie-security-body" },
+                h("b", null, "Check this before you send or run anything"),
+                h("ul", null, notes.map((w) => h("li", null, w))),
+                h("div", { class: "hint" }, "Importing runs nothing and sends nothing. Local files are only uploaded after you allow each one, and Settings → Enforce TLS verification keeps certificate checks on for every request.")));
+            return notes;
+        }
+
         function renderPreview() {
             clear(preview);
             renderSource();
+            const security = renderSecurity();
             const importButton = VH.modalButton(body, "Import");
             if (importButton) importButton.disabled = !result || busy;
             if (error) {
@@ -186,7 +230,7 @@
             preview.appendChild(h("div", { class: "ie-detected" }, safeIcon("check"), h("span", null, "Detected: ", h("b", null, sourceLabel))));
 
             // notes first (e.g. secret values to fill in): they matter more than the list of requests
-            const warnings = result.warnings || [];
+            const warnings = (result.warnings || []).filter((w) => !security.includes(w));
             if (warnings.length) {
                 preview.appendChild(h("div", { class: "callout warn ie-warnings" },
                     h("div", null, h("b", null, plural(warnings.length, "note"))),
@@ -283,6 +327,9 @@
                     s.name = uniqueSuiteName(s.name);
                 } else if (!existing) {
                     s.name = uniqueSuiteName(s.name);
+                } else {
+                    // replaced by a file from outside: files allowed for upload in the old version must be allowed again
+                    await call("files.forgetApprovals", s.id);
                 }
                 await App.saveSuite(s);
                 added.push(s);

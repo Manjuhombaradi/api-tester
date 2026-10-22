@@ -8,6 +8,7 @@
 var path = require("path");
 var fs = require("fs");
 var spawn = require("child_process").spawn;
+var spawnSync = require("child_process").spawnSync;
 
 var MIN_NODE = [22, 13];
 var nodeVersion = process.versions.node.split(".").map(Number);
@@ -86,17 +87,39 @@ function spawnFailed(command, err) {
     process.exit(1);
 }
 
+// Linux: why the Chromium sandbox cannot work here, or null when it can. Same rules as the packaged launcher
+// (build/afterPack.js): it is only turned off as root, without usable user namespaces (containers; Ubuntu
+// 23.10+ allows them only for programs with an AppArmor profile, and node_modules/electron has none) and
+// without a root-owned SUID chrome-sandbox, or on request. Decided here because Electron checks it before
+// any app code runs.
+function linuxSandboxProblem(electronPath) {
+    if (userArgs.indexOf("--no-sandbox") >= 0) return "requested with --no-sandbox";
+    var optOut = process.env.API_TESTER_DISABLE_SANDBOX;
+    if (optOut && ["0", "false", "no"].indexOf(optOut) < 0) return "API_TESTER_DISABLE_SANDBOX is set";
+    if (process.getuid && process.getuid() === 0) return "running as root";
+    var probe = spawnSync("unshare", ["-Ur", "true"], { stdio: "ignore" });
+    if (!probe.error && probe.status === 0) return null;
+    // setuid helper (mode 4755, owned by root); Chromium cannot start it from a path with a space
+    var helper = path.join(path.dirname(electronPath), "chrome-sandbox");
+    try {
+        var stat = fs.statSync(helper);
+        if (stat.uid === 0 && (stat.mode & 2048) && helper.indexOf(" ") < 0) return null;
+    } catch (_) { /* no helper */ }
+    return "user namespaces are not available or are blocked on this system";
+}
+
 var env = {};
 Object.keys(process.env).forEach(function (key) { env[key] = process.env[key]; });
 delete env.ELECTRON_RUN_AS_NODE;
 var args = [appDir].concat(userArgs);
-// Linux: same decision as the packaged launcher (build/afterPack.js) - the Chromium sandbox fails as root,
-// under Ubuntu 23.10+'s AppArmor user-namespace restriction (node_modules/electron has no profile) and
-// without a root-owned SUID chrome-sandbox; the app only loads its own local pages. It must be set before
-// Electron starts: Electron checks it before any app code runs.
 if (process.platform === "linux") {
-    env.ELECTRON_DISABLE_SANDBOX = "1";
-    if (args.indexOf("--no-sandbox") < 0) args.splice(1, 0, "--no-sandbox");
+    var sandboxProblem = linuxSandboxProblem(electron);
+    if (sandboxProblem) {
+        console.error("API Tester: Chromium sandbox disabled (" + sandboxProblem + "). See SECURITY.md (Linux sandbox).");
+        env.ELECTRON_DISABLE_SANDBOX = "1";
+        env.API_TESTER_SANDBOX_DISABLED = sandboxProblem;
+        if (args.indexOf("--no-sandbox") < 0) args.splice(1, 0, "--no-sandbox");
+    }
 }
 
 run(electron, args, env);

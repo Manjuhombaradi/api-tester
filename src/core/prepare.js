@@ -10,6 +10,7 @@ const FormData = require("form-data");
 const { createScope, referencedVariables } = require("./variables");
 const { DEFAULT_SETTINGS, USER_AGENT } = require("./http");
 const { getOAuth2Token, peekOAuth2Token } = require("./auth");
+const { SECRET_AUTH_FIELDS } = require("./secrets");
 
 const DEFAULT_CONTENT_TYPES = {
     json: "application/json",
@@ -64,16 +65,24 @@ function encodeQuery(s) {
     return encodeURIComponent(s).replace(/%(2C|3A|2F|40|24|5B|5D)/gi, (m) => decodeURIComponent(m)).replace(/'/g, "%27");
 }
 
-/** Effective request settings: request-level values (not null) win over the app settings. */
+/**
+ * Effective request settings: request-level values (not null) win over the app settings. With the app setting
+ * enforceTlsVerification, TLS certificates are always verified: a request (or the app setting Verify TLS) that turns
+ * verification off is ignored (tlsEnforced tells that this happened). verifyTlsFrom: where verifyTls came from.
+ */
 function effectiveSettings(requestSettings, appSettings) {
     const app = { ...DEFAULT_SETTINGS, ...(appSettings || {}) };
     const r = requestSettings || {};
     const num = (v) => (v === null || v === undefined || v === "" || !Number.isFinite(Number(v)) || Number(v) < 0 ? null : Number(v));
+    const wanted = typeof r.verifyTls === "boolean" ? r.verifyTls : app.verifyTls !== false;
+    const enforce = app.enforceTlsVerification === true;
     return {
         timeoutMs: num(r.timeoutMs) ?? num(app.timeoutMs) ?? DEFAULT_SETTINGS.timeoutMs,
         followRedirects: typeof r.followRedirects === "boolean" ? r.followRedirects : app.followRedirects !== false,
         maxRedirects: 10,
-        verifyTls: typeof r.verifyTls === "boolean" ? r.verifyTls : app.verifyTls !== false
+        verifyTls: enforce ? true : wanted,
+        verifyTlsFrom: typeof r.verifyTls === "boolean" ? "request" : "settings",
+        tlsEnforced: enforce && !wanted
     };
 }
 
@@ -110,14 +119,100 @@ function resolveFilePath(filePath, baseDir) {
     return path.isAbsolute(p) ? p : path.resolve(baseDir || process.cwd(), p);
 }
 
-async function readFileFor(filePath, what, baseDir) {
-    const full = resolveFilePath(filePath, baseDir);
+// Windows: \\server\share\file, //server/share/file, the device namespaces \\?\ and \\.\ (any mix of slashes) and \??\
+const NETWORK_PATH = /^(?:[\\/]{2}|[\\/]\?\?[\\/])/;
+
+/**
+ * Why a suite's file path is never used, or "". On Windows, only touching a network path (\\server\share\file)
+ * already connects to that server and sends the user's Windows sign-in (NTLM), so such a path from a shared suite
+ * is refused before anything looks at it - before approval, realpath or stat. A relative path next to a suite that
+ * the user keeps on a network share is fine (that server is the user's choice). platform: for tests.
+ */
+function filePathProblem(filePath, platform = process.platform) {
+    const p = String(filePath).trim();
+    if (platform !== "win32" || !NETWORK_PATH.test(p)) return "";
+    return `The local file path ${p} points to a network share or a Windows device. API Tester does not upload such files, ` +
+        "because opening them would send your Windows sign-in to that server. Copy the file to this computer and choose it again.";
+}
+
+// Linux / macOS pseudo files (process environment, devices): never uploaded, even when approved.
+const SYSTEM_FOLDERS = process.platform === "win32" ? [] : ["/proc/", "/sys/", "/dev/"];
+
+/** The Error for a file path that is never used (see filePathProblem); code FILE_PATH_REFUSED, no "Allow" for it. */
+function filePathRefused(message, full, details) {
+    return Object.assign(new Error(message), { code: "FILE_PATH_REFUSED", filePath: full, kind: details.kind, field: details.field || "" });
+}
+
+/** The Error for a local file the user has not allowed yet (code FILE_NOT_APPROVED; the app asks, then sends again). */
+function fileNotApproved(full, details, host) {
+    return Object.assign(new Error(`This request uploads the local file ${full}. Allow it first.`), {
+        code: "FILE_NOT_APPROVED",
+        filePath: full,
+        realPath: details.realPath || full,
+        kind: details.kind,
+        field: details.field || "",
+        host: host || "",
+        suiteId: details.suiteId || null,
+        requestId: details.requestId || null
+    });
+}
+
+/** Asks ctx.approveFile(absolutePath, details); a missing or failing approver means "not approved". */
+async function isApproved(full, details, ctx) {
+    if (typeof ctx.approveFile !== "function") return false;
     try {
-        return await fs.promises.readFile(full);
+        return !!(await ctx.approveFile(full, details));
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Approval of a local file in two steps, so that nothing on disk is touched for a path the user has not allowed
+ * (no realpath / stat: no network connection, no "file exists" answer for a shared suite): first the path as written
+ * (details.realPath null), then - only when that is allowed - the real file it points to (a link is checked again).
+ * -> { ok, real, details } (real: null when the file does not exist or cannot be resolved).
+ */
+async function approveInSteps(full, ctx, info) {
+    const details = { suiteId: ctx.suiteId || null, requestId: ctx.requestId || null, kind: info.kind, field: info.field || "", realPath: null };
+    if (!(await isApproved(full, details, ctx))) return { ok: false, real: null, details };
+    let real = null;
+    try {
+        real = await fs.promises.realpath(full);
+    } catch (err) {
+        if (err.code !== "ENOENT" && err.code !== "ENOTDIR") real = full; // reported when it is read (permissions)
+    }
+    if (real === null || real === full) return { ok: true, real, details };
+    const withReal = { ...details, realPath: real };
+    return { ok: await isApproved(full, withReal, ctx), real, details: withReal };
+}
+
+/**
+ * Reads a local file for an upload. A shared suite must not be able to send files of this computer (SSH keys, cloud
+ * credentials) to its own server, so every file needs approval: ctx.approveFile(absolutePath, { suiteId, requestId,
+ * kind, field, realPath }) must return true (the app: files picked in its file dialog or allowed by the user; the
+ * CLI: files in the suite's folder or allowed with --allow-file). It is asked first with realPath null (before the
+ * file is looked at), then again with the real path when the path is a link. Otherwise nothing is read and an Error
+ * with code FILE_NOT_APPROVED is thrown. Network paths on Windows are refused before that (FILE_PATH_REFUSED).
+ */
+async function readFileFor(filePath, what, ctx, info) {
+    const full = resolveFilePath(filePath, ctx.baseDir);
+    const problem = filePathProblem(filePath);
+    if (problem) throw filePathRefused(problem, full, info);
+    const { ok, real, details } = await approveInSteps(full, ctx, info);
+    if (!ok) throw fileNotApproved(full, details, ctx.host);
+    if (real === null) throw new Error(`File not found for ${what}: ${full}`);
+    if (SYSTEM_FOLDERS.some((dir) => real.startsWith(dir))) throw new Error(`${full} is a system file, not a file that can be uploaded (${what})`);
+    try {
+        const stat = await fs.promises.stat(real);
+        if (stat.isDirectory()) throw Object.assign(new Error("folder"), { code: "EISDIR" });
+        if (!stat.isFile()) throw new Error(`${full} is not a regular file (${what})`);
+        return await fs.promises.readFile(real);
     } catch (err) {
         if (err.code === "ENOENT") throw new Error(`File not found for ${what}: ${full}`);
         if (err.code === "EISDIR") throw new Error(`${full} is a folder, not a file (${what})`);
         if (err.code === "EACCES" || err.code === "EPERM") throw new Error(`No permission to read ${full} (${what})`);
+        if (!err.code) throw err;
         throw new Error(`Cannot read ${full} for ${what}: ${err.message}`);
     }
 }
@@ -282,9 +377,22 @@ function buildUrl(rawUrl, params, preview) {
 
 // ------------------------------------------------------------------ auth
 
+/** Credentials of an auth config with {{variables}} resolved (for masking in results and reports). */
+function authSecrets(auth, R) {
+    const out = [];
+    if (!auth || typeof auth !== "object") return out;
+    for (const [group, field] of SECRET_AUTH_FIELDS) {
+        if (group !== auth.type || !auth[group]) continue;
+        const value = R(auth[group][field]);
+        if (value && value.trim()) out.push(value, value.trim());
+    }
+    return out;
+}
+
 async function applyAuth(auth, ctx) {
     const { R, headers, query } = ctx;
     const manual = getHeader(headers, "authorization") !== undefined;
+    for (const secret of authSecrets(auth, R)) ctx.secrets.push(secret);
     switch (auth.type) {
         case "basic": {
             const user = R(auth.basic && auth.basic.username);
@@ -310,6 +418,7 @@ async function applyAuth(auth, ctx) {
                 query.push([key, value]);
                 return `API key in query parameter "${key}"`;
             }
+            ctx.sensitiveHeaders.push(key.toLowerCase());
             if (getHeader(headers, key) !== undefined) return `Header "${key}" set manually (API key not applied)`;
             setHeader(headers, key, value);
             return `API key in header "${key}"`;
@@ -333,6 +442,7 @@ async function applyAuth(auth, ctx) {
             if (ctx.preview) {
                 const cached = peekOAuth2Token(resolved, ctx.oauthCache);
                 if (cached) {
+                    ctx.secrets.push(cached.accessToken);
                     setHeader(headers, "Authorization", `${cached.tokenType} ${cached.accessToken}`);
                     return `${cached.tokenType} token (oauth2 ${grant}, cached)`;
                 }
@@ -341,6 +451,8 @@ async function applyAuth(auth, ctx) {
             }
             checkUrlHost(o.tokenUrl, tokenUrl, ctx.scope, "OAuth 2.0 token URL", true); // auth.js reports an empty one
             const token = await getOAuth2Token(resolved, { settings: ctx.settings, cache: ctx.oauthCache, signal: ctx.signal });
+            ctx.secrets.push(token.accessToken);
+            if (token.refreshToken) ctx.secrets.push(token.refreshToken);
             setHeader(headers, "Authorization", `${token.tokenType} ${token.accessToken}`);
             return `${token.tokenType} token (oauth2 ${grant}${token.fromCache ? ", cached" : ""})`;
         }
@@ -353,6 +465,13 @@ async function applyAuth(auth, ctx) {
 
 async function buildBody(body, ctx) {
     const { R, headers, preview, baseDir } = ctx;
+    // preview: whether each file is allowed already (null when no approver was given), for the editor's badges;
+    // a path that is not allowed is not looked at (see approveInSteps), a refused network path is never allowed
+    const approvalFor = async (rawPath, full, kind, field) => {
+        if (filePathProblem(rawPath)) return false;
+        if (typeof ctx.approveFile !== "function") return null;
+        return (await approveInSteps(full, ctx, { kind, field })).ok;
+    };
     const b = body || {};
     const mode = b.mode || "none";
     const none = { body: null, bodyText: "" };
@@ -393,10 +512,18 @@ async function buildBody(body, ctx) {
                         continue;
                     }
                     const fileName = path.basename(filePath);
-                    parts.push({ key, type: "file", value: "", filePath: resolveFilePath(filePath, baseDir), fileName, contentType });
-                    lines.push(`${key}: <file ${fileName}>`);
-                    if (preview) continue;
-                    const data = await readFileFor(filePath, `the form field "${key}"`, baseDir);
+                    const full = resolveFilePath(filePath, baseDir);
+                    const part = { key, type: "file", value: "", filePath: full, fileName, contentType };
+                    const problem = filePathProblem(filePath);
+                    if (problem) part.fileProblem = problem;
+                    parts.push(part);
+                    ctx.files.push({ kind: "multipart", field: key, path: full, ...(problem ? { problem } : {}) });
+                    lines.push(`${key}: <file ${full}>`);
+                    if (preview) {
+                        part.approved = await approvalFor(filePath, full, "multipart", key);
+                        continue;
+                    }
+                    const data = await readFileFor(filePath, `the form field "${key}"`, ctx, { kind: "multipart", field: key });
                     formData.append(key, data, contentType ? { filename: fileName, contentType } : { filename: fileName });
                 } else {
                     const value = R(p.value);
@@ -417,10 +544,13 @@ async function buildBody(body, ctx) {
                 throw new Error("Binary body: choose a file to send");
             }
             ensureContentType(headers, DEFAULT_CONTENT_TYPES.binary);
-            const fileName = path.basename(filePath);
             const full = resolveFilePath(filePath, baseDir);
-            if (preview) return { body: null, bodyText: `<file ${fileName}>`, binaryPath: full };
-            return { body: await readFileFor(filePath, "the binary body", baseDir), bodyText: `<file ${fileName}>`, binaryPath: full };
+            const problem = filePathProblem(filePath);
+            ctx.files.push({ kind: "binary", field: "", path: full, ...(problem ? { problem } : {}) });
+            if (preview) {
+                return { body: null, bodyText: `<file ${full}>`, binaryPath: full, binaryApproved: await approvalFor(filePath, full, "binary", ""), ...(problem ? { binaryFileProblem: problem } : {}) };
+            }
+            return { body: await readFileFor(filePath, "the binary body", ctx, { kind: "binary", field: "" }), bodyText: `<file ${full}>`, binaryPath: full };
         }
         case "graphql": {
             const g = b.graphql || {};
@@ -453,17 +583,36 @@ async function buildBody(body, ctx) {
  *  preview: true -> never fetches OAuth tokens (a cached one is used, else a placeholder) and never reads files
  *           (for the Code view / Copy as cURL; missing files and an empty URL do not throw then),
  *  baseDir: folder that relative file paths are resolved against (default: current directory).
+ *  approveFile(absolutePath, { suiteId, requestId, kind: "multipart" | "binary", field, realPath }) -> boolean
+ *           (or a Promise): asked before any local file is read for an upload; without it no file is read.
+ *           Asked first with realPath null (nothing on disk is touched before that), then, when the path is a
+ *           link, again with the real path. A file that is not approved throws an Error with code
+ *           FILE_NOT_APPROVED, filePath, host, kind, field. On Windows a network or device path
+ *           (\\server\share\file) throws FILE_PATH_REFUSED without asking (preview: approved false, fileProblem /
+ *           binaryFileProblem: the reason, for the editor).
+ *  suiteId, requestId: passed to approveFile (default: suite.id, request.id).
  * -> PreparedRequest { method, url, headers: [[name, value]], body: Buffer|null, bodyText, bodyMode,
- *    settings: { timeoutMs, followRedirects, maxRedirects, verifyTls }, unresolved: string[], authInfo,
- *    form?: [[k, v]], multipart?: [{ key, type, value, filePath, fileName, contentType }], binaryPath? }
+ *    settings: { timeoutMs, followRedirects, maxRedirects, verifyTls, verifyTlsFrom, tlsEnforced }, unresolved: string[],
+ *    authInfo, files: [{ kind, field, path, problem? }] (local files uploaded, absolute paths; problem: why the path is
+ *    never used - do not look at that path on disk either), sensitiveHeaders: [lower-case
+ *    names of credential headers, e.g. the API key header], form?: [[k, v]],
+ *    multipart?: [{ key, type, value, filePath, fileName, contentType, approved?, fileProblem? }], binaryPath?,
+ *    binaryApproved?, binaryFileProblem? }
+ *    plus the non-enumerable secretValues: resolved credentials (Auth tab, OAuth tokens, URL password) for masking;
+ *    not copied by JSON, IPC or object spread.
  * Throws a readable Error for problems the user must fix (empty URL, a URL without host or with an unknown
- * {{variable}} in the host - naming the empty / unknown variable, missing file, bad GraphQL variables, failed
- * OAuth token request). In preview mode only GraphQL variables can throw. User name and password in the URL
- * are moved into a Basic Authorization header (unless one is set).
+ * {{variable}} in the host - naming the empty / unknown variable, missing or not approved file, bad GraphQL
+ * variables, failed OAuth token request). In preview mode only GraphQL variables can throw. User name and password
+ * in the URL are moved into a Basic Authorization header (unless one is set).
  */
 async function prepareRequest(request, options = {}) {
     if (!request || typeof request !== "object") throw new Error("No request to prepare");
-    const { suite = null, parents = [], settings = null, oauthCache = null, signal = null, preview = false, baseDir = null } = options;
+    const { suite = null, parents = [], settings = null, oauthCache = null, signal = null, preview = false, baseDir = null, approveFile = null } = options;
+    const suiteId = options.suiteId !== undefined ? options.suiteId : (suite && suite.id) || null;
+    const requestId = options.requestId !== undefined ? options.requestId : request.id || null;
+    const secrets = [];
+    const sensitiveHeaders = [];
+    const files = [];
     const scope = options.scope || createScope({ suite, parents });
     const unresolved = new Set();
     /** Resolves {{variables}} -> { value, unresolved, used } and remembers the unknown names. */
@@ -486,7 +635,7 @@ async function prepareRequest(request, options = {}) {
 
     const { auth, source, sourceName } = findEffectiveAuth(request, parents, suite);
     let authInfo = await applyAuth(auth, {
-        R, RD, scope, headers, query, preview, oauthCache, signal,
+        R, RD, scope, headers, query, preview, oauthCache, signal, secrets, sensitiveHeaders,
         settings: { ...appSettings, timeoutMs: effective.timeoutMs, verifyTls: effective.verifyTls }
     });
     if (auth.type !== "none" && source === "folder") authInfo += ` - from folder "${sourceName}"`;
@@ -498,6 +647,7 @@ async function prepareRequest(request, options = {}) {
     if (credentials) {
         url = credentials.url;
         if (credentials.username || credentials.password) {
+            if (credentials.password) secrets.push(credentials.password);
             let info;
             if (getHeader(headers, "authorization") !== undefined) {
                 info = "user name and password in the URL not used (an Authorization header is set)";
@@ -509,7 +659,13 @@ async function prepareRequest(request, options = {}) {
         }
     }
     const bodyMode = (request.body && request.body.mode) || "none";
-    const built = await buildBody(request.body, { R, headers, preview, baseDir });
+    let host = "";
+    try {
+        host = new URL(url).host;
+    } catch {
+        host = "";
+    }
+    const built = await buildBody(request.body, { R, headers, preview, baseDir, approveFile, suiteId, requestId, host, files });
 
     if (getHeader(headers, "user-agent") === undefined) headers.push(["User-Agent", USER_AGENT]);
     if (getHeader(headers, "accept") === undefined) headers.push(["Accept", "*/*"]);
@@ -523,12 +679,34 @@ async function prepareRequest(request, options = {}) {
         bodyMode,
         settings: effective,
         unresolved: [...unresolved],
-        authInfo
+        authInfo,
+        files,
+        sensitiveHeaders: [...new Set(sensitiveHeaders)]
     };
     if (built.form) prepared.form = built.form;
     if (built.multipart) prepared.multipart = built.multipart;
     if (built.binaryPath !== undefined) prepared.binaryPath = built.binaryPath;
+    if (built.binaryApproved !== undefined) prepared.binaryApproved = built.binaryApproved;
+    if (built.binaryFileProblem) prepared.binaryFileProblem = built.binaryFileProblem;
+    Object.defineProperty(prepared, "secretValues", { value: [...new Set(secrets.filter((v) => typeof v === "string" && v))], enumerable: false });
     return prepared;
 }
 
-module.exports = { prepareRequest, effectiveSettings, findEffectiveAuth, collectHeaders, buildUrl, checkUrlHost, splitUrlCredentials, OAUTH_PLACEHOLDER };
+/**
+ * Credentials of the auth that applies to a request (request, folder or suite), {{variables}} resolved with scope.
+ * The runner masks them in results before the request is prepared (error messages, script logs).
+ */
+function authSecretValues(request, { suite = null, parents = [], scope = null } = {}) {
+    try {
+        const s = scope || createScope({ suite, parents });
+        const { auth } = findEffectiveAuth(request, parents, suite);
+        return authSecrets(auth, (text) => s.resolve(text === undefined || text === null ? "" : String(text)));
+    } catch {
+        return [];
+    }
+}
+
+module.exports = {
+    prepareRequest, effectiveSettings, findEffectiveAuth, collectHeaders, buildUrl, checkUrlHost, splitUrlCredentials, resolveFilePath, filePathProblem,
+    authSecretValues, OAUTH_PLACEHOLDER
+};

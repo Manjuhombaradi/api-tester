@@ -51,6 +51,7 @@ const Sidebar = {
             this.treeEl,
             this.historyEl);
         App.on("suites-changed", () => this.render());
+        App.on("settings-changed", () => this.render()); // Enforce TLS verification hides the "TLS off" marks
         App.on("active-tab-changed", () => this.updateSelection());
         App.on("history-changed", () => this.renderHistory());
         this.render();
@@ -225,6 +226,9 @@ const Sidebar = {
             h("span", { class: "tree-toggle" }),
             methodBadge(req.method, { short: true }),
             this.isRenaming(suite.id, req.id) ? this.renameInput(req.name, (v) => this.renameItem(suite.id, req.id, v)) : this.label(req.name, term),
+            // the request itself turns TLS certificate checks off (and Settings does not enforce them)
+            req.settings && req.settings.verifyTls === false && !App.effectiveSettings().enforceTlsVerification
+                ? h("span", { class: "tree-tls", title: "TLS certificates are not verified for this request (its Settings tab)" }, icon("unlock")) : null,
             tab && tab.dirty ? this.dirtyDot() : null,
             h("span", { class: "tree-actions" },
                 iconButton("more", "More actions", (e) => { e.stopPropagation(); this.menuFor(suite.id, req.id, e.currentTarget); })));

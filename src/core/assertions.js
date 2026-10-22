@@ -11,6 +11,7 @@ const Ajv2019 = require("ajv/dist/2019");
 const Ajv2020 = require("ajv/dist/2020");
 const addFormats = require("ajv-formats");
 const { newAssertion } = require("./model");
+const { runWithTimeLimit, createTimeBudget, isTimeLimit, REGEX_TIME_LIMIT_MS, QUERY_TIME_LIMIT_MS, REGEX_TIMEOUT_MESSAGE } = require("./limits");
 
 const MAX_ACTUAL_CHARS = 300;
 const MAX_SCHEMA_ERRORS = 5;
@@ -138,6 +139,19 @@ function deepEqual(a, b) {
 }
 
 /**
+ * Runs a regular expression from a suite on a text under a time limit (limits.js): a catastrophic pattern cannot hang
+ * the app. ctx.budget: shared budget of one response. -> re.test(text) or, with exec, re.exec(text).
+ * Throws TimeLimitError("Regex took too long (possible catastrophic backtracking)").
+ */
+function runRegex(re, text, ctx = null, exec = false) {
+    return runWithTimeLimit(() => (exec ? re.exec(text) : re.test(text)), {
+        limitMs: REGEX_TIME_LIMIT_MS,
+        budget: ctx && ctx.budget,
+        message: REGEX_TIMEOUT_MESSAGE
+    });
+}
+
+/**
  * "/pattern/flags" or a plain pattern -> RegExp (global / sticky flags dropped so test() has no state).
  * The slash form is used only when the part after the last "/" is a set of valid flags, so path-like
  * patterns such as "/api/users" or "/users/me" are plain patterns.
@@ -217,9 +231,10 @@ function jsonPathSyntaxError(p) {
 
 /**
  * Runs a JSONPath query -> { ok, path, count, value } (value: single match as is, several as an array, none undefined)
- * or { ok:false, message } for an invalid path.
+ * or { ok:false, message } for an invalid path or a query that took too long (filters can hold regular expressions).
+ * ctx.budget: shared time budget of one response (limits.js).
  */
-function jsonPathQuery(json, path) {
+function jsonPathQuery(json, path, ctx = null) {
     const p = normalizeJsonPath(path);
     if (!p) return { ok: false, message: "Enter a JSONPath, e.g. $.data[0].id" };
     const syntaxError = jsonPathSyntaxError(p);
@@ -229,8 +244,13 @@ function jsonPathQuery(json, path) {
         matches = p === "$" && json === null ? [null] : [];
     } else {
         try {
-            matches = JSONPath({ path: p, json, wrap: true, eval: "safe" });
+            matches = runWithTimeLimit(() => JSONPath({ path: p, json, wrap: true, eval: "safe" }), {
+                limitMs: QUERY_TIME_LIMIT_MS,
+                budget: ctx && ctx.budget,
+                message: `JSONPath "${p}" took too long (more than ${QUERY_TIME_LIMIT_MS / 1000} s; a regular expression in a filter may backtrack catastrophically)`
+            });
         } catch (err) {
+            if (isTimeLimit(err)) return { ok: false, message: err.message };
             return { ok: false, message: `Invalid JSONPath "${p}": ${err.message.replace(/^jsonPath: /, "")}` };
         }
     }
@@ -312,11 +332,25 @@ function schemaErrorPath(instancePath) {
     }).join("");
 }
 
-/** -> { passed, message } */
-function validateSchema(value, schemaText) {
-    const v = getValidator(schemaText);
+/** -> { passed, message }. Time limited (a "pattern" in the schema is a regular expression from the suite). */
+function validateSchema(value, schemaText, ctx = null) {
+    let v;
+    let valid;
+    try {
+        valid = runWithTimeLimit(() => {
+            v = getValidator(schemaText);
+            return v.error ? false : v.validate(value);
+        }, {
+            limitMs: QUERY_TIME_LIMIT_MS,
+            budget: ctx && ctx.budget,
+            message: `JSON Schema validation took too long (more than ${QUERY_TIME_LIMIT_MS / 1000} s; a "pattern" in the schema may backtrack catastrophically)`
+        });
+    } catch (err) {
+        if (isTimeLimit(err)) return { passed: false, message: err.message };
+        throw err;
+    }
     if (v.error) return { passed: false, message: v.error };
-    if (v.validate(value)) return { passed: true, message: "" };
+    if (valid) return { passed: true, message: "" };
     const errors = v.validate.errors || [];
     const parts = errors.slice(0, MAX_SCHEMA_ERRORS).map((e) => {
         let text = `${schemaErrorPath(e.instancePath)} ${e.message}`;
@@ -331,7 +365,7 @@ function validateSchema(value, schemaText) {
 // ------------------------------------------------------------------ reading the actual value
 
 /** -> { value } | { value: undefined, missing: "why not found" } | { configError: "assertion is incomplete" } */
-function readActual(source, property, response) {
+function readActual(source, property, response, ctx = null) {
     switch (source) {
         case "status":
             return { value: typeof response.status === "number" ? response.status : toNumber(response.status) ?? undefined };
@@ -359,7 +393,7 @@ function readActual(source, property, response) {
             return { value: response.bodyText == null ? "" : String(response.bodyText) };
         case "jsonpath": {
             const json = responseJson(response);
-            const q = jsonPathQuery(json.ok ? json.value : undefined, property);
+            const q = jsonPathQuery(json.ok ? json.value : undefined, property, ctx);
             if (!q.ok) return { configError: q.message };
             if (!json.ok) return { value: undefined, missing: json.message };
             return q.count === 0 ? { value: undefined, missing: `No match for ${q.path}` } : { value: q.value };
@@ -462,8 +496,11 @@ function quote(s) {
     return `"${shorten(s, 80)}"`;
 }
 
-/** Evaluates one operator -> { passed, message }. `found` holds the actual value and why it may be missing. */
-function check(operator, found, expected) {
+/**
+ * Evaluates one operator -> { passed, message }. `found` holds the actual value and why it may be missing.
+ * ctx.budget: shared time budget of one response for regular expressions and schemas (limits.js).
+ */
+function check(operator, found, expected, ctx = null) {
     const actual = found.value;
     const missing = found.missing || "Value not found";
     const a = formatValue(actual, 80);
@@ -509,7 +546,14 @@ function check(operator, found, expected) {
                 } catch (err) {
                     return { passed: false, message: err.message };
                 }
-                return ok(re.test(textOf(actual)), `${quote(a)} does not match ${String(expected)}`);
+                let matched;
+                try {
+                    matched = runRegex(re, textOf(actual), ctx);
+                } catch (err) {
+                    if (isTimeLimit(err)) return { passed: false, message: err.message };
+                    throw err;
+                }
+                return ok(matched, `${quote(a)} does not match ${String(expected)}`);
             });
         case "isType":
             return needValue(() => {
@@ -546,7 +590,7 @@ function check(operator, found, expected) {
         case "isNotEmpty":
             return ok(!isEmptyValue(actual), actual === undefined ? missing : "Value is empty");
         case "validSchema":
-            return needValue(() => validateSchema(actual, expected));
+            return needValue(() => validateSchema(actual, expected, ctx));
         default:
             return { passed: false, message: `Unknown operator "${operator}"` };
     }
@@ -620,9 +664,13 @@ function describeAssertion(assertion, resolvedExpected) {
  * -> [{ id, source, operator, label, passed, actual, expected, message, skipped }]
  * Disabled assertions are returned as skipped. When the request got no response, every assertion is skipped
  * ("Not checked") because the error itself is reported on the request.
+ * options.budget: time budget shared with the captures of the same response (limits.createTimeBudget); regular
+ * expressions, JSONPath queries and schemas are time limited, so a catastrophic pattern fails its check instead of
+ * hanging the app.
  */
-function evaluateAssertions(assertions, response, scope) {
+function evaluateAssertions(assertions, response, scope, options = {}) {
     const out = [];
+    const ctx = { budget: (options && options.budget) || createTimeBudget() };
     const resolve = (text) => (scope && typeof scope.resolve === "function" ? scope.resolve(String(text ?? "")) : String(text ?? ""));
     const noResponse = !response || typeof response !== "object" || !!response.error;
     for (const a of Array.isArray(assertions) ? assertions : []) {
@@ -651,8 +699,8 @@ function evaluateAssertions(assertions, response, scope) {
         let result;
         let found = { value: undefined };
         try {
-            found = readActual(a.source, property, response);
-            result = found.configError ? { passed: false, message: found.configError } : check(a.operator, found, expected);
+            found = readActual(a.source, property, response, ctx);
+            result = found.configError ? { passed: false, message: found.configError } : check(a.operator, found, expected, ctx);
         } catch (err) {
             result = { passed: false, message: `Could not evaluate: ${err.message}` };
         }
@@ -702,5 +750,5 @@ module.exports = {
     ASSERTION_SOURCES, ASSERTION_OPERATORS, operatorsForSource,
     evaluateAssertions, suggestAssertions, describeAssertion,
     // helpers shared with extract.js / scripts / UI metadata
-    responseJson, jsonPathQuery, normalizeJsonPath, jsonPathFor, headerValue, parseRegex, formatValue, deepEqual, valuesEqual, toNumber, validateSchema
+    responseJson, jsonPathQuery, normalizeJsonPath, jsonPathFor, headerValue, parseRegex, runRegex, formatValue, deepEqual, valuesEqual, toNumber, validateSchema
 };

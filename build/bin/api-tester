@@ -3,6 +3,7 @@
 # Runs the app's CLI with Electron's built-in Node.js, without opening a window:
 #   "/Applications/API Tester.app/Contents/Resources/bin/api-tester" run suite.apisuite --env Staging
 # Shorter: sudo ln -sf "/Applications/API Tester.app/Contents/Resources/bin/api-tester" /usr/local/bin/api-tester
+# Needs Electron's RunAsNode fuse (package.json build.electronFuses.runAsNode: true, see SECURITY.md).
 SELF="$0"
 # follow symbolic links (e.g. /usr/local/bin/api-tester -> this file) to find the app
 while [ -L "$SELF" ]; do

@@ -7,3 +7,10 @@ build
 .DS_Store
 api-tester-reports
 reports
+# never send local secrets to the Docker build
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx

@@ -88,17 +88,25 @@ async function requestToken(o, settings, signal) {
         if (o.clientSecret) form.set("client_secret", o.clientSecret);
     }
     const s = settings || {};
+    // Redirects are not followed: the client secret and the password (in the body or the Basic header) must only
+    // go to the token URL the user entered, never to an address a server answers with.
     const response = await sendRequest({
         method: "POST",
         url: o.tokenUrl,
         headers,
         body: Buffer.from(form.toString(), "utf8"),
-        settings: { timeoutMs: s.timeoutMs, followRedirects: true, maxRedirects: 10, verifyTls: s.verifyTls }
-    }, { settings: s, cookieJar: null, signal });
+        settings: { timeoutMs: s.timeoutMs, followRedirects: false, maxRedirects: 0, verifyTls: s.verifyTls }
+    }, { settings: s, cookieJar: null, signal, secretValues: [o.clientSecret, o.password].filter(Boolean) });
 
     if (response.error) {
         if (response.error.code === "ABORTED") throw Object.assign(new Error("Request cancelled"), { code: "ABORTED" });
         throw new Error(`OAuth 2.0 token request to ${o.tokenUrl} failed: ${response.error.message}`);
+    }
+    if (response.status >= 300 && response.status < 400) {
+        const location = response.headersMap && response.headersMap.location;
+        throw new Error(`OAuth 2.0 token endpoint ${o.tokenUrl} answered with a redirect (${response.status}${location ? ` to ${location}` : ""}). ` +
+            "Redirects are not followed for token requests, so the client secret and password only go to the Token URL you entered. " +
+            "If the new address is right, enter it as the Token URL.");
     }
     const data = parseTokenBody(response);
     if (response.status < 200 || response.status >= 300) {

@@ -5,7 +5,12 @@ with no-code assertions, chain requests by capturing values, run whole suites (a
 and share your suites with anyone as a single file. It runs on Windows, macOS and Linux, works offline,
 and has a command line version for CI pipelines.
 
-**Download:** [latest release](https://github.com/Manjuhombaradi/api-tester/releases/latest) (Windows, macOS, Linux installers) · [source](https://github.com/Manjuhombaradi/api-tester)
+**Download:** [latest release](https://github.com/Manjuhombaradi/api-tester/releases/latest) (Windows, macOS, Linux installers) · [source](https://github.com/Manjuhombaradi/api-tester) · [security](SECURITY.md)
+
+**Author:** Manjunagouda Hombaradi ([manjuhombaradi@gmail.com](mailto:manjuhombaradi@gmail.com))
+
+Your data stays on your computer: the app sends requests only where you send them and contacts nothing else
+(no telemetry, update checks or accounts). See [Security](#14-security) and [SECURITY.md](SECURITY.md).
 
 ---
 
@@ -26,14 +31,17 @@ Pick the file for your machine. None of them need Node.js or extra setup; only t
 
 ### First launch of the unsigned builds
 
-The installers are not code-signed yet, so the operating system asks once:
+The installers are not code-signed yet, so the operating system asks once. Check the file first: compare it with
+`SHA256SUMS.txt` from the release, or run `gh attestation verify <file> --repo Manjuhombaradi/api-tester`
+(see [SECURITY.md](SECURITY.md#7-verifying-a-download)).
 
 - **Windows SmartScreen** ("Windows protected your PC"): click **More info**, then **Run anyway**.
 - **macOS** ("API Tester" Not Opened): click **Done**, open **System Settings → Privacy & Security** and click
   **Open Anyway** (on older macOS: Control-click the app → **Open**). Or run once:
   `xattr -dr com.apple.quarantine "/Applications/API Tester.app"` — needed before using the command line
   version on a new Mac or CI runner, too.
-- **Linux**: nothing to do. The launcher handles the Chromium sandbox, root logins and machines without a display.
+- **Linux**: nothing to do. The launcher handles root logins and machines without a display, and keeps the Chromium
+  sandbox on wherever the system allows it ([details](SECURITY.md#9-linux-chromium-sandbox)).
 
 ---
 
@@ -75,6 +83,11 @@ to edit its variables, default headers and authorization (inherited by everythin
 | **Settings** | Timeout, follow redirects, verify TLS certificates (each *Inherit / On / Off*) |
 | **Docs** | A description for your team |
 
+**Local files** (multipart file fields, binary bodies) are shown with their path and an approval badge. Files you
+choose with **Choose file…** are approved. A file named by an imported suite is uploaded only after you allow it:
+*"Allow upload of &lt;path&gt; to &lt;host&gt;?"* (**Allow once**, **Always for this suite**, **Cancel**).
+Requests with *Verify TLS* turned off show a warning.
+
 Paste a cURL command into the URL field (or use **Import**) to turn it into a request. **Code snippets…** in the request's
 `⋯` menu shows the request as cURL, JavaScript (fetch), Python (requests) and PowerShell; **Copy as cURL** copies it directly.
 
@@ -94,8 +107,8 @@ Where values come from (the first match wins):
 5. **Globals**: shared by all suites on this computer (*Environments → Globals*)
 
 **Environments** (for example *Local*, *Staging*, *Production*) belong to a suite and travel with it when you export it.
-Mark passwords, tokens and keys as **secret**: they are masked on screen and in reports, and left out of exports unless
-you choose to include them.
+Mark passwords, tokens and keys as **secret**: they are masked on screen, in history and in reports, encrypted on
+disk with your system's keychain, and left out of exports unless you choose to include them.
 
 Dynamic values: `{{$guid}}`, `{{$uuid}}`, `{{$timestamp}}`, `{{$timestampMs}}`, `{{$isoTimestamp}}`, `{{$randomInt}}`,
 `{{$randomFloat}}`, `{{$randomString}}`, `{{$randomEmail}}`, `{{$randomBoolean}}`.
@@ -148,7 +161,8 @@ auth type with `{{token}}`). The sample suite's folder *2. Login and chaining* s
 ## 7. Scripts (optional)
 
 For special cases you can add JavaScript before the request (*pre*) or after the response (*post*).
-Scripts run in a sandbox (no file or network access, 5 seconds at most).
+Scripts run only when you send, in a sandbox (no file or network access, 5 seconds at most). They can read and
+change variables, so look at the scripts of suites you get from others (the import lists them).
 
 ```js
 // post-response script
@@ -215,31 +229,52 @@ api-tester run <suite> [options]
       --bail                 stop at the first failed request
       --timeout <ms>         timeout for requests that do not set their own (default 30000, 0 = none)
   -k, --insecure             do not verify TLS certificates, for every request
-      --var <key=value>      set a variable, e.g. a secret from your CI (repeatable)
+      --strict-tls           always verify TLS certificates, also for requests that turn it off (API_TESTER_STRICT_TLS=1)
+      --var <key=value>      set a variable (repeatable; visible in the process list, use --var-env for secrets)
+      --var-env <key=NAME>   set a variable from the environment variable NAME (repeatable)
       --globals <file>       global variables (JSON object, list, or a Postman globals file)
+      --allow-file <path>    allow uploads of this file or of the files in this folder (repeatable)
   -r, --reporter <list>      cli, junit, html, json (default cli)
   -o, --out <dir>            folder for report files (default ./api-tester-reports)
-      --proxy <url>          HTTP proxy (default: HTTPS_PROXY / HTTP_PROXY)
+      --proxy <url>          HTTP proxy (default: HTTPS_PROXY / HTTP_PROXY; NO_PROXY hosts are reached directly)
       --no-color             plain output
       --echo-server          start the local echo server during the run
       --echo-port <n>        port for --echo-server (default 3999; also pass --var baseUrl=http://127.0.0.1:<n>)
-api-tester echo-server [--port 3999] [--host 127.0.0.1]
+api-tester echo-server [--port 3999] [--host 127.0.0.1] [--allow-host <name>]
 api-tester --help | --version
+environment: API_TESTER_VAR_<key>=value sets a variable (masked like --var-env)
 ```
 
 Postman collections, OpenAPI / Swagger files and cURL commands can be run directly too.
-Secret values are not in exported files: pass them with `--var name=value` (the run tells you which ones are missing).
-The same goes for passwords and tokens typed straight into an *Auth* tab: put a variable there instead (for example `{{token}}`)
-and pass it with `--var token=…`.
+Secret values are not in exported files: pass them from your CI's secret store (the run tells you which ones are missing).
+The same goes for passwords and tokens typed straight into an *Auth* tab: put a variable there instead (for example `{{token}}`).
 
-**GitHub Actions** (Docker image built from this repository's `Dockerfile`, or use Node.js):
+| How to pass a variable | Example | Notes |
+|---|---|---|
+| Environment variable `API_TESTER_VAR_<name>` | `API_TESTER_VAR_token=… api-tester run suite.apisuite` | Recommended for secrets: not in the process list or shell history |
+| `--var-env <name>=<ENV_VAR>` | `api-tester run suite.apisuite --var-env token=API_TOKEN` | Reads the value of an existing environment variable |
+| `--var <name>=<value>` | `--var baseUrl=https://staging.example.com` | Visible to other users in the process list: not for secrets |
+
+Values from all three are masked (`•••••`) in the output and the reports (`--var` values that are plain web addresses,
+small numbers or true / false stay readable).
+
+**Local files**: a suite uploads local files (multipart file fields, binary bodies) only from its own folder. Allow other
+files or folders with `--allow-file <path>` (repeatable); any other file makes the request fail with a message.
+
+**TLS**: `--strict-tls` (or `API_TESTER_STRICT_TLS=1`) verifies certificates even for requests whose *Settings* turn it off;
+`--insecure` turns verification off for every request (self-signed test servers only).
+
+**GitHub Actions** (Docker image built from this repository's `Dockerfile`, or use Node.js). The secret goes in as an
+environment variable, so it is neither in the command line nor in the reports:
 
 ```yaml
 - name: API tests
+  env:
+    API_TESTER_VAR_token: ${{ secrets.API_TOKEN }}
   run: |
     docker build -t api-tester https://github.com/Manjuhombaradi/api-tester.git
-    docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" api-tester \
-      run tests/my-api.apisuite --env CI --var token=${{ secrets.API_TOKEN }} --reporter cli,junit --out reports
+    docker run --rm --user "$(id -u):$(id -g)" -e API_TESTER_VAR_token -v "$PWD:/work" api-tester \
+      run tests/my-api.apisuite --env CI --strict-tls --reporter cli,junit --out reports
 ```
 
 **GitLab CI / Jenkins**: run the same command and publish `reports/*.junit.xml` as JUnit test results.
@@ -254,17 +289,21 @@ and pass it with `--var token=…`.
 - The receiver uses **Import** (or drags the file onto the window, or double-clicks it) and gets the same suite, and fills in
   the secret values in *Environments*.
 - **Import** also reads Postman collections (v2.0 / v2.1) and environments, OpenAPI 3 / Swagger 2 (JSON or YAML) and cURL
-  commands, and shows what it found before adding anything.
+  commands, and shows what it found before adding anything: at the top, which requests upload local files, have scripts
+  or turn off TLS certificate checks. Importing sends nothing and runs nothing.
 
 ---
 
 ## 11. The local echo server
 
-The app includes a small API on `http://127.0.0.1:3999` for the sample suite and for trying things out (*Settings → Local echo server*
-to change the port or turn it off). Useful endpoints: `/anything` (echoes your request), `/status/404`, `/delay/2000`, `/json`,
+The app includes a small API on `http://127.0.0.1:3999` for the sample suite and for trying things out. It runs only when
+you start it: adding the sample suite starts it, and *Settings → Local echo server* starts, stops or auto-starts it and
+changes the port. It is reachable from this computer only and answers only requests for `localhost` / `127.0.0.1`
+(other host names get *421*, which protects it from web pages using DNS rebinding). Useful endpoints: `/anything` (echoes your request), `/status/404`, `/delay/2000`, `/json`,
 `/xml`, `/image.png`, `/headers`, `/cookies/set?name=value`, `/basic-auth/user/pass`, `POST /login` (`demo` / `demo`),
 `POST /auth/token` (OAuth 2.0, client `demo` / `secret`), `GET /me`, and `/users` (create, read, update, delete).
-On the command line: `api-tester echo-server`.
+On the command line: `api-tester echo-server` (`--allow-host <name>` to answer another host name, e.g. a Docker service name;
+in Docker publish it as `-p 127.0.0.1:3999:3999`).
 
 ---
 
@@ -276,9 +315,13 @@ On the command line: `api-tester echo-server`.
   - macOS: `~/Library/Application Support/API Tester`
   - Linux: `~/.config/API Tester`
 - `workspace.backup.json` there is a copy from the last start, in case you need to go back: **Import** it to get its suites and environments back (globals are not imported).
-- Logs: `logs/api-tester.log` in the data folder.
-- **Settings**: default timeout, follow redirects, verify TLS, proxy (with no-proxy list), maximum response size, history size,
-  echo server, theme (system / light / dark).
+- Logs: `logs/api-tester.log` in the data folder (no URLs, headers or secrets).
+- The data folder can only be opened by your user account (macOS / Linux: `0700`, files `0600`). Secret values are encrypted
+  with the system keychain (macOS Keychain, Windows DPAPI, Linux GNOME Keyring / KWallet); on Linux without a keyring they are
+  saved unencrypted and *Settings* tells you so.
+- **Settings**: default timeout, follow redirects, verify TLS, **enforce TLS verification** (ignore *Verify TLS: Off* in requests
+  and imported suites), proxy (with no-proxy list), maximum response size, history size, echo server, theme (system / light / dark).
+- Developer tools are not available in the installed app; start it with `API_TESTER_DEVTOOLS=1` for troubleshooting.
 
 ### Keyboard shortcuts
 
@@ -299,7 +342,11 @@ On the command line: `api-tester echo-server`.
 |---|---|
 | *Connection refused* | The server is not running or the port is wrong. For the sample suite, start the echo server (*Settings*). |
 | *Unknown variables: {{name}}* | The variable is not defined in the active environment, suite, folder or globals, or the right environment is not selected. |
-| Certificate errors (self-signed test servers) | Turn off *Verify TLS* in the request's *Settings* tab or in *Settings*; on the command line use `--insecure`. |
+| Certificate errors (self-signed test servers) | Turn off *Verify TLS* in the request's *Settings* tab or in *Settings* (a request's own setting is ignored while *Enforce TLS verification* is on); on the command line use `--insecure`. |
+| Certificate errors behind a company proxy that inspects TLS | Add your company's root certificate (PEM file from IT): *Settings → Trusted CA certificates*, or on the command line `--ca-file company-root.pem` / `API_TESTER_CA_FILE` / `NODE_EXTRA_CA_CERTS`. Do not turn off TLS verification instead. |
+| *This request uploads the local file …* | Allow it in the dialog (app), or add `--allow-file <path>` (command line). |
+| Echo server answers *421* | The request used another host name. Use `127.0.0.1` / `localhost`, or start it with `--allow-host <name>`. |
+| Linux: *Chromium sandbox disabled (…)* on stderr | Information only: the system cannot run the sandbox (root, container, AppImage on Ubuntu 23.10+). See [SECURITY.md](SECURITY.md#9-linux-chromium-sandbox). |
 | Requests time out behind a company proxy | Set the proxy in *Settings* (command line: `--proxy` or `HTTPS_PROXY`). |
 | *Port 3999 is already in use* | Another program (or a second copy) uses it. Choose another port in *Settings → Local echo server*. |
 | The runner sends an old version | It runs the saved suite; save your open requests first. |
@@ -310,7 +357,24 @@ On the command line: `api-tester echo-server`.
 
 ---
 
-## 14. Run from source and build the installers
+## 14. Security
+
+- **Network**: requests go only where you send them, from the app itself; nothing is contacted at startup or in the background
+  (no telemetry, update checks, crash reports or accounts). Chromium's background services and spell-check downloads are off.
+- **Your data** stays in the data folder on this computer, readable only by your account; secrets are encrypted at rest and
+  masked in history, logs and reports.
+- **Shared suites** cannot upload local files without your approval, scripts run only when you send (sandboxed), and the import
+  lists local files, scripts and disabled TLS checks before anything is added.
+- **Organisations**: turn on *Settings → Enforce TLS verification*, use `--strict-tls` and `API_TESTER_VAR_<name>` in CI, and keep
+  the echo server on `127.0.0.1`. The [hardening guide](SECURITY.md#5-hardening-guide-for-organisations) has the full list.
+- **Releases** include `SHA256SUMS.txt`, a build provenance attestation and an SBOM (CycloneDX). The builds are not code-signed yet.
+- **Report a vulnerability** privately: the repository's *Security* tab → *Report a vulnerability*.
+
+Details: [SECURITY.md](SECURITY.md).
+
+---
+
+## 15. Run from source and build the installers
 
 Requires **Node.js 22.13 or newer**.
 
@@ -320,6 +384,10 @@ npm start                                 # desktop app
 npm run cli -- run samples/sample.apisuite --echo-server   # command line version
 npm run sample                            # the same, shorter
 ```
+
+`npm install` and the double-click launchers below download the dependencies from the npm registry (exact versions and
+hashes from `package-lock.json`; `npm ci` installs exactly those) and, on the first start, Electron from GitHub (checked against the checksums in the `electron` package). For
+computers without internet access use the installers or the Docker image.
 
 Double-click launchers (they install dependencies on first run): `Start API Tester.command` (macOS),
 `Start API Tester.bat` (Windows), `start-api-tester.sh` (Linux; command line version when there is no display).
@@ -334,8 +402,9 @@ npm run dist:linux    # .deb, AppImage, .tar.gz (x64 and arm64)
 npm run docker:build  # command line Docker image
 ```
 
-Each OS is best built on itself. The included GitHub Actions workflow (`.github/workflows/build.yml`) tests the command
-line version and builds all three; push a tag such as `v1.0.0` to get a GitHub release with every installer.
+Each OS is best built on itself. The included GitHub Actions workflow (`.github/workflows/build.yml`) checks the dependencies
+(`npm audit`, `npm audit signatures`), tests the command line version and builds all three; push a tag such as `v1.0.1` to get a
+GitHub release with every installer, `SHA256SUMS.txt`, an SBOM and a build provenance attestation.
 `npm run icon` renders `build/icon.svg` to `build/icon.png`; `npm run samples` regenerates `samples/` after a change to
 `src/core/sample.js` (CI checks this with `npm run samples:check`).
 
@@ -349,6 +418,7 @@ src/main/       Electron main process: main.js (window, menus, single instance, 
                 commandLine.js (the command line version)
 src/renderer/   user interface (plain HTML/CSS/JS, no build step)
 src/cli.js      command line entry point (Node.js, Docker, installed app)
-build/          icon, CLI wrappers (bin/), Linux launcher hook (afterPack.js)
+build/          icon, CLI wrappers (bin/), afterPack.js (Linux launcher, fuses on the Linux binary, macOS licence notices)
+scripts/        npm start launcher, sample and icon generators, check-fuses.js and sbom-runtime.js (used by CI)
 samples/        sample suite and data file
 ```

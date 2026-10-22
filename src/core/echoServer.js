@@ -2,8 +2,15 @@
 // Local test API ("echo server"). Lets the sample suite and a user's first requests work offline, and gives
 // testers predictable endpoints for status codes, delays, cookies, auth flows and a small CRUD resource.
 // Pure Node (http + zlib), no state outside the server instance: users and tokens reset on every start.
+//
+// Web pages: CORS answers "Access-Control-Allow-Origin: *" without credentials, so a page may call the demo
+// endpoints but the browser never sends its cookies or reads responses meant for a logged-in user. Requests for a
+// host name other than localhost (or the address the server listens on, or names allowed with allowedHosts) get
+// 421: that stops DNS rebinding, where a web page uses its own domain name to reach 127.0.0.1.
 const http = require("http");
 const crypto = require("crypto");
+const net = require("net");
+const os = require("os");
 const zlib = require("zlib");
 
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
@@ -311,6 +318,59 @@ function bearerToken(header) {
     return m ? m[1] : null;
 }
 
+// ------------------------------------------------------------------ host check (DNS rebinding)
+
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
+const ANY_ADDRESS = new Set(["", "0.0.0.0", "::"]);
+
+function isLoopbackAddress(address) {
+    const a = String(address || "").toLowerCase();
+    return a === "localhost" || a === "::1" || /^127\.\d+\.\d+\.\d+$/.test(a) || a === "::ffff:127.0.0.1";
+}
+
+/** Host header -> host name in lower case without port and brackets ("[::1]:3999" -> "::1"). */
+function hostName(hostHeader) {
+    const h = String(hostHeader || "").trim().toLowerCase();
+    if (h.startsWith("[")) {
+        const end = h.indexOf("]");
+        return end > 0 ? h.slice(1, end) : h;
+    }
+    const colon = h.indexOf(":");
+    return (colon >= 0 && colon === h.lastIndexOf(":") ? h.slice(0, colon) : h).replace(/\.$/, "");
+}
+
+/**
+ * -> (hostHeader) => true when the request may be answered. Always: localhost, *.localhost, 127.0.0.1, [::1]. When
+ * listening on another address: that address, any IP address (DNS cannot rebind an IP) and this computer's name.
+ * allowedHosts: more names ("*" turns the check off).
+ */
+function createHostCheck(listenHost, allowedHosts = []) {
+    const host = String(listenHost || "").trim().toLowerCase().replace(/^\[|\]$/g, "");
+    const names = new Set(LOOPBACK_HOSTS);
+    const loopbackOnly = !ANY_ADDRESS.has(host) && isLoopbackAddress(host);
+    if (host && !ANY_ADDRESS.has(host)) names.add(host);
+    if (!loopbackOnly) {
+        const own = String(os.hostname() || "").toLowerCase();
+        if (own) {
+            names.add(own);
+            names.add(own.endsWith(".local") ? own : `${own}.local`);
+        }
+    }
+    for (const n of Array.isArray(allowedHosts) ? allowedHosts : []) {
+        const name = hostName(n);
+        if (name) names.add(name);
+    }
+    if (names.has("*")) return () => true;
+    return (hostHeader) => {
+        if (hostHeader === undefined) return true; // HTTP/1.0 tools without a Host header (browsers always send one)
+        const name = hostName(hostHeader);
+        if (!name) return false;
+        if (names.has(name) || name.endsWith(".localhost")) return true;
+        if (net.isIP(name)) return loopbackOnly ? isLoopbackAddress(name) : true;
+        return false;
+    };
+}
+
 // ------------------------------------------------------------------ server
 
 function seedUsers() {
@@ -322,7 +382,7 @@ function seedUsers() {
     ]);
 }
 
-function createHandler(state) {
+function createHandler(state, hostAllowed = () => true) {
     function send(res, status, body, headers = {}) {
         if (res.headersSent || res.destroyed) return;
         let payload = body;
@@ -594,9 +654,18 @@ function createHandler(state) {
     }
 
     return (req, res) => {
-        // CORS, so the echo server can also be called from a browser page.
-        res.setHeader("Access-Control-Allow-Origin", req.headers.origin || "*");
-        res.setHeader("Access-Control-Allow-Credentials", "true");
+        if (!hostAllowed(req.headers.host)) {
+            // DNS rebinding: a web page reaching this server under its own domain name gets no answer it could use
+            const name = hostName(req.headers.host);
+            readBody(req).catch(() => {});
+            error(res, 421, `This echo server does not answer requests for the host name "${name}".`, {
+                hint: "It answers localhost, 127.0.0.1 and [::1] (and the address it listens on). This protects it against web pages that " +
+                    `use DNS rebinding. To use another name, start it with --allow-host ${name} (or API_TESTER_ECHO_ALLOWED_HOSTS=${name}).`
+            }, { Connection: "close" });
+            return;
+        }
+        // CORS, so the echo server can also be called from a browser page - without credentials (cookies)
+        res.setHeader("Access-Control-Allow-Origin", "*");
         res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS");
         res.setHeader("Access-Control-Allow-Headers", req.headers["access-control-request-headers"] || "*");
         res.setHeader("Access-Control-Expose-Headers", "*");
@@ -613,10 +682,11 @@ function createHandler(state) {
 }
 
 /**
- * Starts the echo server. -> Promise<{ port, url, close() }>.
+ * Starts the echo server. -> Promise<{ port, url, host, close() }>.
  * port 0 picks a free port. close() resolves when the server has stopped (open connections are dropped).
+ * allowedHosts: host names to answer besides localhost / the listen address (see createHostCheck).
  */
-function startEchoServer({ port = 3999, host = "127.0.0.1" } = {}) {
+function startEchoServer({ port = 3999, host = "127.0.0.1", allowedHosts = [] } = {}) {
     return new Promise((resolve, reject) => {
         const wanted = Number(port);
         if (!Number.isInteger(wanted) || wanted < 0 || wanted > 65535) {
@@ -624,7 +694,7 @@ function startEchoServer({ port = 3999, host = "127.0.0.1" } = {}) {
             return;
         }
         const state = { users: seedUsers(), nextUserId: 4, tokens: new Map(), timers: new Set() };
-        const server = http.createServer(createHandler(state));
+        const server = http.createServer(createHandler(state, createHostCheck(host, allowedHosts)));
         server.keepAliveTimeout = 5000;
         server.on("clientError", (err, socket) => {
             if (socket.writable) socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
@@ -645,6 +715,7 @@ function startEchoServer({ port = 3999, host = "127.0.0.1" } = {}) {
             let closing = null;
             resolve({
                 port: actualPort,
+                host,
                 url: `http://${urlHost}:${actualPort}`,
                 close() {
                     if (closing) return closing;
@@ -661,4 +732,4 @@ function startEchoServer({ port = 3999, host = "127.0.0.1" } = {}) {
     });
 }
 
-module.exports = { startEchoServer, ENDPOINTS, SAMPLE_JSON, DEMO_USER, DEMO_CLIENT };
+module.exports = { startEchoServer, createHostCheck, isLoopbackAddress, ENDPOINTS, SAMPLE_JSON, DEMO_USER, DEMO_CLIENT };
