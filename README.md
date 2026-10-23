@@ -7,6 +7,11 @@ and has a command line version for CI pipelines.
 
 **Download:** [latest release](https://github.com/Manjuhombaradi/api-tester/releases/latest) (Windows, macOS, Linux installers) · [source](https://github.com/Manjuhombaradi/api-tester) · [security](SECURITY.md)
 
+> **macOS says *“Apple could not verify “API Tester.app” is free of malware…”*?** The installers are not signed with a paid
+> Apple certificate yet, so macOS shows this for every download. Click **Done**, open **System Settings → Privacy & Security**,
+> scroll down and click **Open Anyway** (once). Windows shows *“Windows protected your PC”*: **More info → Run anyway**.
+> [Details and how to check the download first](#first-launch-of-the-unsigned-builds).
+
 **Author:** Manjunagouda Hombaradi ([manjuhombaradi@gmail.com](mailto:manjuhombaradi@gmail.com))
 
 Your data stays on your computer: the app sends requests only where you send them and contacts nothing else
@@ -36,7 +41,8 @@ The installers are not code-signed yet, so the operating system asks once. Check
 (see [SECURITY.md](SECURITY.md#7-verifying-a-download)).
 
 - **Windows SmartScreen** ("Windows protected your PC"): click **More info**, then **Run anyway**.
-- **macOS** ("API Tester" Not Opened): click **Done**, open **System Settings → Privacy & Security** and click
+- **macOS** (*"Apple could not verify "API Tester.app" is free of malware…"*, or *"API Tester" Not Opened* on older
+  versions): click **Done**, open **System Settings → Privacy & Security**, scroll down and click
   **Open Anyway** (on older macOS: Control-click the app → **Open**). Or run once:
   `xattr -dr com.apple.quarantine "/Applications/API Tester.app"` — needed before using the command line
   version on a new Mac or CI runner, too.
