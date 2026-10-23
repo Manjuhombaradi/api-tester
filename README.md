@@ -298,6 +298,9 @@ environment variable, so it is neither in the command line nor in the reports:
   commands, and shows what it found before adding anything: at the top, which requests upload local files, have scripts
   or turn off TLS certificate checks. Importing sends nothing and runs nothing.
 
+API Tester is an independent project, written from scratch. It is not affiliated with, endorsed by or based on Postman;
+"Postman" is a trademark of Postman, Inc. and is named here only to say which files can be imported.
+
 ---
 
 ## 11. The local echo server
