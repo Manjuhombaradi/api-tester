@@ -10,13 +10,13 @@
 
 # --- production dependencies, exactly as locked, without install scripts (Electron and the packaging tools are
 #     dev dependencies and are not installed)
-FROM node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS deps
+FROM node:25-bookworm-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 
 # --- runtime image: Node.js and the command line version only
-FROM node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
+FROM node:25-bookworm-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370
 LABEL org.opencontainers.image.authors="Manjunagouda Hombaradi <manjuhombaradi@gmail.com>"
 # npm, npx, corepack and yarn are not needed to run suites: removed (less to attack, fewer scanner findings)
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
