@@ -241,7 +241,7 @@
     "https-proxy-agent": "^9.1.0",
     "js-yaml": "^5.5.0",
     "jsonpath-plus": "^11.2.1",
-    "tough-cookie": "^6.0.2"
+    "tough-cookie": "^6.1.0"
   },
   "devDependencies": {
     "electron": "45.0.0",
