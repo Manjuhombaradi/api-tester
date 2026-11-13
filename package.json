@@ -240,7 +240,7 @@
     "http-proxy-agent": "^9.1.0",
     "https-proxy-agent": "^9.1.0",
     "js-yaml": "^5.5.0",
-    "jsonpath-plus": "^11.2.1",
+    "jsonpath-plus": "^11.3.0",
     "tough-cookie": "^6.0.2"
   },
   "devDependencies": {
